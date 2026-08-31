@@ -1,0 +1,147 @@
+@prefix hw3:   <http://taica.course/hw3/ontology#> .
+@prefix probe: <http://taica.course/hw3/data/probe#> .
+@prefix soma:  <http://www.ease-crc.org/ont/SOMA.owl#> .
+@prefix xsd:   <http://www.w3.org/2001/XMLSchema#> .
+
+# =============================================================================
+# TA-provided IK/FK execution trace dataset (grading; do not modify)
+#
+# 30 records, good and bad mixed, including threshold-boundary values.
+# Your shapes.ttl is validated against this file, and the result is compared
+# record by record with ta-answer-key.json: each record's flag set must
+# match the answer EXACTLY (no false positives, no false negatives).
+# Boundary semantics: numeric thresholds are INCLUSIVE (sh:maxInclusive) —
+# values exactly at 0.90 / 0.02 / 0.005 conform; joint limits are inclusive
+# too — an angle exactly at a limit is legal.
+# =============================================================================
+
+probe:ik_case_01 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.45"^^xsd:double ;
+    hw3:hasResidual "0.001"^^xsd:double .
+
+probe:ik_case_02 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.62"^^xsd:double ;
+    hw3:hasResidual "0.008"^^xsd:double .
+
+probe:ik_case_03 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.3"^^xsd:double ;
+    hw3:hasResidual "0.0005"^^xsd:double .
+
+probe:ik_case_04 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.75"^^xsd:double ;
+    hw3:hasResidual "0.015"^^xsd:double .
+
+probe:ik_case_05 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.9"^^xsd:double ;
+    hw3:hasResidual "0.02"^^xsd:double .
+
+probe:ik_case_06 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.55"^^xsd:double ;
+    hw3:hasResidual "0.019"^^xsd:double .
+
+probe:ik_case_07 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.68"^^xsd:double ;
+    hw3:hasResidual "0.0002"^^xsd:double .
+
+probe:ik_case_08 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.82"^^xsd:double ;
+    hw3:hasResidual "0.011"^^xsd:double .
+
+probe:ik_case_09 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.901"^^xsd:double ;
+    hw3:hasResidual "0.004"^^xsd:double .
+
+probe:ik_case_10 a hw3:IKComputation ;
+    hw3:hasTargetDistance "1.42"^^xsd:double ;
+    hw3:hasResidual "0.012"^^xsd:double .
+
+probe:ik_case_11 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.6"^^xsd:double ;
+    hw3:hasResidual "0.0201"^^xsd:double .
+
+probe:ik_case_12 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.72"^^xsd:double ;
+    hw3:hasResidual "0.15"^^xsd:double .
+
+probe:ik_case_13 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.85"^^xsd:double ;
+    hw3:hasResidual "0.05"^^xsd:double .
+
+probe:ik_case_14 a hw3:IKComputation ;
+    hw3:hasTargetDistance "1.1"^^xsd:double ;
+    hw3:hasResidual "0.61"^^xsd:double .
+
+probe:ik_case_15 a hw3:IKComputation ;
+    hw3:hasTargetDistance "2.05"^^xsd:double ;
+    hw3:hasResidual "1.95"^^xsd:double .
+
+probe:ik_case_16 a hw3:IKComputation ;
+    hw3:hasTargetDistance "0.95"^^xsd:double ;
+    hw3:hasResidual "0.3"^^xsd:double .
+
+probe:fk_case_01 a hw3:FKComputation ;
+    hw3:hasPoseError "0.0006"^^xsd:double ;
+    hw3:hasJacobianError "0.0003"^^xsd:double .
+
+probe:fk_case_02 a hw3:FKComputation ;
+    hw3:hasPoseError "0.001"^^xsd:double ;
+    hw3:hasJacobianError "0.002"^^xsd:double .
+
+probe:fk_case_03 a hw3:FKComputation ;
+    hw3:hasPoseError "0.0049"^^xsd:double ;
+    hw3:hasJacobianError "0.01"^^xsd:double .
+
+probe:fk_case_04 a hw3:FKComputation ;
+    hw3:hasPoseError "0.005"^^xsd:double ;
+    hw3:hasJacobianError "0.004"^^xsd:double .
+
+probe:fk_case_05 a hw3:FKComputation ;
+    hw3:hasPoseError "0.003"^^xsd:double ;
+    hw3:hasJacobianError "0.0008"^^xsd:double .
+
+probe:fk_case_06 a hw3:FKComputation ;
+    hw3:hasPoseError "0.0051"^^xsd:double ;
+    hw3:hasJacobianError "0.006"^^xsd:double .
+
+probe:fk_case_07 a hw3:FKComputation ;
+    hw3:hasPoseError "0.031"^^xsd:double ;
+    hw3:hasJacobianError "0.12"^^xsd:double .
+
+probe:fk_case_08 a hw3:FKComputation ;
+    hw3:hasPoseError "0.12"^^xsd:double ;
+    hw3:hasJacobianError "0.35"^^xsd:double .
+
+# ---- joint-limit records (for STUDENT TODO 3) ----
+
+probe:jl_joint_a a soma:RevoluteJoint ;
+    hw3:hasJointLowerLimit "-4.712389"^^xsd:double ;
+    hw3:hasJointUpperLimit "-1.570796"^^xsd:double .
+
+probe:jl_joint_b a soma:RevoluteJoint ;
+    hw3:hasJointLowerLimit "-2.3562"^^xsd:double ;
+    hw3:hasJointUpperLimit "-1.0"^^xsd:double .
+
+probe:jl_case_01 a soma:JointState ;
+    soma:hasJointPosition "-3.14"^^xsd:double ;
+    hw3:isStateOfJoint probe:jl_joint_a .
+
+probe:jl_case_02 a soma:JointState ;
+    soma:hasJointPosition "-1.570796"^^xsd:double ;
+    hw3:isStateOfJoint probe:jl_joint_a .
+
+probe:jl_case_03 a soma:JointState ;
+    soma:hasJointPosition "-0.9"^^xsd:double ;
+    hw3:isStateOfJoint probe:jl_joint_a .
+
+probe:jl_case_04 a soma:JointState ;
+    soma:hasJointPosition "-5.1"^^xsd:double ;
+    hw3:isStateOfJoint probe:jl_joint_a .
+
+probe:jl_case_05 a soma:JointState ;
+    soma:hasJointPosition "-1.2"^^xsd:double ;
+    hw3:isStateOfJoint probe:jl_joint_b .
+
+probe:jl_case_06 a soma:JointState ;
+    soma:hasJointPosition "-2.6"^^xsd:double ;
+    hw3:isStateOfJoint probe:jl_joint_b .
+

@@ -1,0 +1,81 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix hw3:  <http://taica.course/hw3/ontology#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix soma: <http://www.ease-crc.org/ont/SOMA.owl#> .
+
+# =============================================================================
+# Task 1 / SHACL — validate your grounded execution data (output/data.ttl)
+#
+# SHACL shapes read grounded numeric values directly to discover execution
+# issues in IK/FK. run_task1.sh invokes Jena's shacl CLI:
+#     shacl validate --shapes shapes.ttl --data output/data.ttl
+#     -> output/validation.ttl   (SHACL validation report, Turtle)
+#
+# Grading (1) uses the full TA shapes in ta-shapes-full.ttl to validate your
+# data.ttl, and (2) uses your shapes.ttl against the TA's mixed 30-record
+# execution dataset (ta-faulty-execution.ttl, including boundary values).
+# Each record's flags must exactly match ta-answer-key.json: no false positives
+# and no false negatives. The scorer identifies flags by sh:message prefix;
+# use the required prefixes below. Thresholds must use sh:maxInclusive because
+# the dataset includes values exactly equal to a threshold.
+# =============================================================================
+
+# ---- Worked example (already implemented): FK accuracy check ----------------
+# FK pose error must not exceed the 0.005 m course threshold; otherwise report
+# FK_INACCURATE.
+hw3:FKAccuracyShape a sh:NodeShape ;
+    sh:targetClass hw3:FKComputation ;
+    sh:property [
+        sh:path hw3:hasPoseError ;
+        sh:maxInclusive "0.005"^^xsd:double ;
+        sh:message "FK_INACCURATE: pose error above the 0.005 m course threshold" ;
+    ] .
+
+# ---- STUDENT TODO 1: arm out of range ---------------------------------------
+# Write a sh:NodeShape targeted at hw3:IKComputation:
+#   hw3:hasTargetDistance must be <= 0.90 (UR5 reach, in metres).
+#   On violation, sh:message must begin with "ARM_OUT_OF_RANGE:".
+# Follow the worked example above; change the path, threshold, and message.
+
+# ------------------------- your shape ----------------------------------------
+
+
+
+# -----------------------------------------------------------------------------
+
+# ---- STUDENT TODO 2: not converged ------------------------------------------
+# Write a sh:NodeShape targeted at hw3:IKComputation:
+#   hw3:hasResidual must be <= 0.02 (course threshold, in metres).
+#   On violation, sh:message must begin with "NO_CONVERGENCE:".
+
+# ------------------------- your shape ----------------------------------------
+
+
+
+# -----------------------------------------------------------------------------
+
+# ---- STUDENT TODO 3: joint limit check (SHACL-SPARQL) -----------------------
+# Write a sh:NodeShape targeted at soma:JointState that reports every joint
+# angle lying outside its own joint's limits.
+#   - The angle is on the JointState:      soma:hasJointPosition
+#   - The state links to its joint via:    hw3:isStateOfJoint
+#   - The joint carries its limits as:     hw3:hasJointLowerLimit / hw3:hasJointUpperLimit
+# SHACL Core cannot compare two values taken from DIFFERENT nodes, so use a
+# SHACL-SPARQL constraint: sh:sparql [ sh:message ... ; sh:prefixes
+# hw3:SparqlPrefixes ; sh:select """ SELECT $this WHERE { ... FILTER (...) } """ ].
+# Rules:
+#   - On violation, sh:message must begin with "JOINT_LIMIT_VIOLATION:".
+#   - Limits are INCLUSIVE: an angle exactly equal to a limit is legal
+#     (the TA dataset contains such a boundary record), so the FILTER must
+#     use strict comparisons (< lower, > upper).
+# The prefixes declaration below is provided for you — reference it with
+# sh:prefixes hw3:SparqlPrefixes inside your constraint.
+hw3:SparqlPrefixes sh:declare
+    [ sh:prefix "hw3" ;  sh:namespace "http://taica.course/hw3/ontology#"^^xsd:anyURI ] ,
+    [ sh:prefix "soma" ; sh:namespace "http://www.ease-crc.org/ont/SOMA.owl#"^^xsd:anyURI ] .
+
+# ------------------------- your shape ----------------------------------------
+
+
+
+# -----------------------------------------------------------------------------

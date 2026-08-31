@@ -1,0 +1,233 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix hw3:  <http://taica.course/hw3/ontology#> .
+@prefix cora: <http://purl.org/ieee1872-owl/cora-bare#> .
+@prefix soma: <http://www.ease-crc.org/ont/SOMA.owl#> .
+@prefix pos:  <http://purl.org/ieee1872-owl/pos#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+
+# =============================================================================
+# TA COMPLETE SHACL SHAPES (grading; do not modify)
+#
+# 兩組 shapes:
+#   STRUCTURE:* — 你的 grounding (data.ttl) 必須符合的結構約束
+#                 (REUSE 的正確性: 類型、必要屬性、xsd:double、6 個 JointState)
+#   問題偵測    — 從數值發現執行過程的問題狀態:
+#                 ARM_OUT_OF_RANGE / NO_CONVERGENCE / JOINT_LIMIT_VIOLATION
+#
+# run_task4.sh 會用本檔驗證 output/data.ttl -> output/ta-validation.ttl,
+# score_semantic.py 依 message 字首評分。
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# STRUCTURE — robot specification
+# ---------------------------------------------------------------------------
+hw3:TA_RobotSpecShape a sh:NodeShape ;
+    sh:targetClass cora:Robot ;
+    sh:property [
+        sh:path hw3:hasJoint ;
+        sh:minCount 6 ; sh:maxCount 6 ;
+        sh:class soma:RevoluteJoint ;
+        sh:message "STRUCTURE: a cora:Robot must link exactly 6 soma:RevoluteJoint via hw3:hasJoint" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasDoF ;
+        sh:minCount 1 ; sh:datatype xsd:integer ;
+        sh:message "STRUCTURE: robot needs hw3:hasDoF (xsd:integer)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:producedBy ;
+        sh:minCount 1 ;
+        sh:message "STRUCTURE: robot needs hw3:producedBy provenance" ;
+    ] .
+
+hw3:TA_JointShape a sh:NodeShape ;
+    sh:targetClass soma:RevoluteJoint ;
+    sh:property [
+        sh:path hw3:jointIndex ;
+        sh:minCount 1 ; sh:datatype xsd:integer ;
+        sh:minInclusive 1 ; sh:maxInclusive 6 ;
+        sh:message "STRUCTURE: each joint needs hw3:jointIndex (integer 1..6)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:dh_a ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: each joint needs hw3:dh_a as xsd:double (bare decimals fail)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:dh_d ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: each joint needs hw3:dh_d as xsd:double" ;
+    ] ;
+    sh:property [
+        sh:path hw3:dh_alpha ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: each joint needs hw3:dh_alpha as xsd:double" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasJointLowerLimit ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: each joint needs hw3:hasJointLowerLimit (xsd:double)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasJointUpperLimit ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: each joint needs hw3:hasJointUpperLimit (xsd:double)" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# STRUCTURE — FK computations
+# ---------------------------------------------------------------------------
+hw3:TA_FKShape a sh:NodeShape ;
+    sh:targetClass hw3:FKComputation ;
+    sh:property [
+        sh:path hw3:hasInputJointConfiguration ;
+        sh:minCount 1 ; sh:maxCount 1 ; sh:class hw3:JointConfiguration ;
+        sh:message "STRUCTURE: FKComputation needs exactly one structured hw3:hasInputJointConfiguration" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasEndEffectorPose ;
+        sh:minCount 1 ; sh:maxCount 1 ; sh:class soma:6DPose ;
+        sh:message "STRUCTURE: FKComputation needs exactly one structured hw3:hasEndEffectorPose (soma:6DPose)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasPoseError ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: FKComputation needs hw3:hasPoseError (xsd:double)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasJacobianError ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: FKComputation needs hw3:hasJacobianError (xsd:double)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:producedBy ; sh:minCount 1 ;
+        sh:message "STRUCTURE: FKComputation needs hw3:producedBy provenance" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# STRUCTURE — IK computations
+# ---------------------------------------------------------------------------
+hw3:TA_IKShape a sh:NodeShape ;
+    sh:targetClass hw3:IKComputation ;
+    sh:property [
+        sh:path hw3:solvesForTarget ;
+        sh:minCount 1 ; sh:maxCount 1 ; sh:class soma:6DPose ;
+        sh:message "STRUCTURE: IKComputation needs exactly one hw3:solvesForTarget pointing at a shared hw3:target_* (soma:6DPose)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasIKStatus ;
+        sh:minCount 1 ;
+        sh:in ( "SOLVED" "OUT_OF_REACH" "NO_CONVERGENCE" "JOINT_LIMIT_VIOLATION" ) ;
+        sh:message "STRUCTURE: hw3:hasIKStatus must be one of SOLVED / OUT_OF_REACH / NO_CONVERGENCE / JOINT_LIMIT_VIOLATION" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasResidual ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: IKComputation needs hw3:hasResidual (xsd:double)" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasTargetDistance ; sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: IKComputation needs hw3:hasTargetDistance (xsd:double) — the reach check reads it" ;
+    ] ;
+    sh:property [
+        sh:path hw3:hasJointConfiguration ;
+        sh:minCount 1 ; sh:maxCount 1 ; sh:class hw3:JointConfiguration ;
+        sh:message "STRUCTURE: IKComputation needs exactly one structured hw3:hasJointConfiguration" ;
+    ] ;
+    sh:property [
+        sh:path hw3:producedBy ; sh:minCount 1 ;
+        sh:message "STRUCTURE: IKComputation needs hw3:producedBy provenance" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# STRUCTURE — joint configurations (the REUSE core: SOMA JointState)
+# ---------------------------------------------------------------------------
+hw3:TA_JointConfigShape a sh:NodeShape ;
+    sh:targetClass hw3:JointConfiguration ;
+    sh:property [
+        sh:path hw3:hasJointState ;
+        sh:minCount 6 ; sh:maxCount 6 ;
+        sh:class soma:JointState ;
+        sh:message "STRUCTURE: a JointConfiguration must aggregate exactly 6 soma:JointState" ;
+    ] ;
+    sh:property [
+        sh:path ( hw3:hasJointState soma:hasJointPosition ) ;
+        sh:minCount 6 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: every JointState needs soma:hasJointPosition (xsd:double)" ;
+    ] ;
+    sh:property [
+        sh:path ( hw3:hasJointState hw3:isStateOfJoint ) ;
+        sh:minCount 6 ;
+        sh:message "STRUCTURE: every JointState must point back at its joint via hw3:isStateOfJoint" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# STRUCTURE — 6D poses (IEEE 1872 POS decomposition)
+# ---------------------------------------------------------------------------
+hw3:TA_PoseShape a sh:NodeShape ;
+    sh:targetClass soma:6DPose ;
+    sh:property [
+        sh:path hw3:hasPositionComponent ;
+        sh:minCount 1 ; sh:maxCount 1 ; sh:class pos:Position ;
+        sh:message "STRUCTURE: a 6DPose needs exactly one pos:Position component" ;
+    ] ;
+    sh:property [
+        sh:path ( hw3:hasPositionComponent hw3:hasPositionX ) ;
+        sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: position component needs hw3:hasPositionX (xsd:double)" ;
+    ] ;
+    sh:property [
+        sh:path ( hw3:hasPositionComponent hw3:hasPositionY ) ;
+        sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: position component needs hw3:hasPositionY (xsd:double)" ;
+    ] ;
+    sh:property [
+        sh:path ( hw3:hasPositionComponent hw3:hasPositionZ ) ;
+        sh:minCount 1 ; sh:datatype xsd:double ;
+        sh:message "STRUCTURE: position component needs hw3:hasPositionZ (xsd:double)" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# 問題偵測 — 與學生 shapes.ttl 相同的兩個核心檢查
+# ---------------------------------------------------------------------------
+hw3:TA_FKAccuracyShape a sh:NodeShape ;
+    sh:targetClass hw3:FKComputation ;
+    sh:property [
+        sh:path hw3:hasPoseError ;
+        sh:maxInclusive "0.005"^^xsd:double ;
+        sh:message "FK_INACCURATE: pose error above the 0.005 m course threshold" ;
+    ] .
+
+hw3:TA_ArmOutOfRangeShape a sh:NodeShape ;
+    sh:targetClass hw3:IKComputation ;
+    sh:property [
+        sh:path hw3:hasTargetDistance ;
+        sh:maxInclusive "0.90"^^xsd:double ;
+        sh:message "ARM_OUT_OF_RANGE: target distance exceeds the UR5 reach (0.90 m)" ;
+    ] .
+
+hw3:TA_NoConvergenceShape a sh:NodeShape ;
+    sh:targetClass hw3:IKComputation ;
+    sh:property [
+        sh:path hw3:hasResidual ;
+        sh:maxInclusive "0.02"^^xsd:double ;
+        sh:message "NO_CONVERGENCE: residual above the 0.02 m course threshold" ;
+    ] .
+
+# ---------------------------------------------------------------------------
+# 問題偵測 (SHACL-SPARQL) — 關節角超出該關節的限位
+# 比較「JointState 的角度」與「其關節個體的上下限」— 跨節點的數值比較,
+# SHACL core 做不到,用 SPARQL constraint。
+# ---------------------------------------------------------------------------
+hw3:TA_Prefixes sh:declare
+    [ sh:prefix "hw3" ;  sh:namespace "http://taica.course/hw3/ontology#"^^xsd:anyURI ] ,
+    [ sh:prefix "soma" ; sh:namespace "http://www.ease-crc.org/ont/SOMA.owl#"^^xsd:anyURI ] .
+
+hw3:TA_JointLimitShape a sh:NodeShape ;
+    sh:targetClass soma:JointState ;
+    sh:sparql [
+        sh:message "JOINT_LIMIT_VIOLATION: joint angle outside the joint's [lower, upper] limits" ;
+        sh:prefixes hw3:TA_Prefixes ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this soma:hasJointPosition ?v ;
+                      hw3:isStateOfJoint ?joint .
+                ?joint hw3:hasJointLowerLimit ?lo ;
+                       hw3:hasJointUpperLimit ?hi .
+                FILTER (?v < ?lo || ?v > ?hi)
+            }
+        """ ;
+    ] .

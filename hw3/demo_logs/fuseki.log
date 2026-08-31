@@ -1,0 +1,63 @@
+============================================================
+  Fuseki web UI :  http://localhost:3030
+  Dataset       :  /hw3   (Task 4 triple store, read-only)
+  Try           :  paste queries/q3_interop_compare.rq or
+                   q4_task_evaluation_report.rq in the query tab
+  Stop          :  Ctrl-C
+============================================================
+15:17:10 INFO  Server          :: Running in read-only mode for /hw3
+15:17:10 INFO  Server          :: Apache Jena Fuseki 4.10.0
+15:17:10 INFO  Config          :: FUSEKI_HOME=/media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/.cache/apache-jena-fuseki-4.10.0/.
+15:17:10 INFO  Config          :: FUSEKI_BASE=/media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/.cache/apache-jena-fuseki-4.10.0/run
+15:17:10 INFO  Config          :: Shiro file: file:///media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/.cache/apache-jena-fuseki-4.10.0/run/shiro.ini
+15:17:10 INFO  Config          :: Template file: templates/config-tdb2-dir-readonly
+15:17:11 INFO  Server          :: Database: TDB2 dataset: location=/media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/store
+15:17:11 INFO  Server          :: Path = /hw3
+15:17:11 INFO  Server          ::   Memory: 15.7 GiB
+15:17:11 INFO  Server          ::   Java:   11.0.31
+15:17:11 INFO  Server          ::   OS:     Linux 6.8.0-124-generic amd64
+15:17:11 INFO  Server          ::   PID:    3202759
+15:17:11 INFO  Server          :: Started 2026/07/28 15:17:11 TST on port 3030
+15:17:11 INFO  Fuseki          :: [1] POST http://localhost:3030/hw3/sparql
+15:17:11 INFO  Fuseki          :: [1] Query = PREFIX hw3: <http://taica.course/hw3/ontology#> SELECT ?evalClass (COUNT(?item) AS ?count) WHERE { VALUES ?evalClass { hw3:PassedFKComputation hw3:SolvedIKComputation hw3:SuccessfulEpisode } ?item a ?evalClass ; hw3:producedBy ?pb . FILTER(?pb != "ta-reference-pipeline") } GROUP BY ?evalClass ORDER BY ?evalClass
+15:17:11 INFO  Fuseki          :: [1] 200 OK (49 ms)
+15:17:11 INFO  Fuseki          :: [2] POST http://localhost:3030/hw3/sparql
+15:17:11 INFO  Fuseki          :: [2] Query = SELECT (COUNT(*) AS ?triples) WHERE { ?s ?p ?o }
+15:17:11 INFO  Fuseki          :: [2] 200 OK (10 ms)
+15:17:16 INFO  Fuseki          :: [3] GET http://localhost:3030/hw3
+15:17:16 INFO  Fuseki          :: [3] 200 OK (57 ms)
+15:17:35 INFO  Fuseki          :: [5] GET http://localhost:3030/hw3/sparql
+15:17:35 WARN  Fuseki          :: Service Description / SPARQL Query / /hw3/sparql
+15:17:35 INFO  Fuseki          :: [5] 404 Not Found (0 ms)
+15:17:37 INFO  Fuseki          :: [6] GET http://localhost:3030/hw3/
+15:17:37 INFO  Fuseki          :: [6] 200 OK (16 ms)
+15:17:53 INFO  Fuseki          :: [10] POST http://localhost:3030/hw3/sparql
+15:17:53 INFO  Fuseki          :: [10] Query = PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> SELECT * WHERE {   ?sub ?pred ?obj . } LIMIT 10
+15:17:53 INFO  Fuseki          :: [10] 200 OK (8 ms)
+15:27:25 INFO  Fuseki          :: [14] GET http://localhost:3030/hw3/sparql
+15:27:25 WARN  Fuseki          :: Service Description / SPARQL Query / /hw3/sparql
+15:27:25 INFO  Fuseki          :: [14] 404 Not Found (0 ms)
+15:27:29 INFO  Fuseki          :: [15] GET http://localhost:3030/hw3/query
+15:27:29 WARN  Fuseki          :: Service Description / SPARQL Query / /hw3/query
+15:27:29 INFO  Fuseki          :: [15] 404 Not Found (0 ms)
+15:27:32 INFO  Fuseki          :: [16] GET http://localhost:3030/hw3/sparql
+15:27:32 WARN  Fuseki          :: Service Description / SPARQL Query / /hw3/sparql
+15:27:32 INFO  Fuseki          :: [16] 404 Not Found (0 ms)
+15:27:46 INFO  Fuseki          :: [23] POST http://localhost:3030/hw3/sparql
+15:27:46 INFO  Fuseki          :: [23] Query = PREFIX rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#> SELECT * WHERE {   ?sub ?pred ?obj . } LIMIT 10
+15:27:46 INFO  Fuseki          :: [23] 200 OK (5 ms)
+16:48:15 INFO  Fuseki          :: [26] POST http://localhost:3030/hw3/sparql
+16:48:15 INFO  Fuseki          :: [26] Query = PREFIX hw3: <http://taica.course/hw3/ontology#> PREFIX soma: <http://www.ease-crc.org/ont/SOMA.owl#> PREFIX dul: <http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#> SELECT ?class (COUNT(?x) AS ?n) (GROUP_CONCAT(STRAFTER(STR(?x),"#");separator=", ") AS ?members) WHERE { VALUES ?class { hw3:PassedFKComputation hw3:SolvedIKComputation hw3:SuccessfulEpisode } ?x a ?class } GROUP BY ?class
+16:48:15 INFO  Fuseki          :: [26] 200 OK (9 ms)
+16:48:15 INFO  Fuseki          :: [27] POST http://localhost:3030/hw3/sparql
+16:48:15 INFO  Fuseki          :: [27] Query = PREFIX hw3: <http://taica.course/hw3/ontology#> PREFIX soma: <http://www.ease-crc.org/ont/SOMA.owl#> PREFIX dul: <http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#> SELECT (COUNT(?x) AS ?events) WHERE { ?x a dul:Event . ?x hw3:producedBy ?p }
+16:48:15 INFO  Fuseki          :: [27] 200 OK (4 ms)
+16:48:15 INFO  Fuseki          :: [28] POST http://localhost:3030/hw3/sparql
+16:48:15 INFO  Fuseki          :: [28] Query = PREFIX hw3: <http://taica.course/hw3/ontology#> PREFIX soma: <http://www.ease-crc.org/ont/SOMA.owl#> PREFIX dul: <http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#> SELECT (COUNT(*) AS ?componentTriples) WHERE { ?r dul:hasComponent ?j }
+16:48:15 INFO  Fuseki          :: [28] 200 OK (4 ms)
+16:48:15 INFO  Fuseki          :: [29] POST http://localhost:3030/hw3/sparql
+16:48:15 INFO  Fuseki          :: [29] Query = PREFIX hw3: <http://taica.course/hw3/ontology#> PREFIX soma: <http://www.ease-crc.org/ont/SOMA.owl#> PREFIX dul: <http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#> SELECT (COUNT(*) AS ?agentTriples) WHERE { ?c dul:involvesAgent ?r }
+16:48:15 INFO  Fuseki          :: [29] 200 OK (4 ms)
+16:48:15 INFO  Fuseki          :: [30] POST http://localhost:3030/hw3/sparql
+16:48:15 INFO  Fuseki          :: [30] Query = PREFIX hw3: <http://taica.course/hw3/ontology#> PREFIX soma: <http://www.ease-crc.org/ont/SOMA.owl#> PREFIX dul: <http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#> SELECT (COUNT(?t) AS ?regions) WHERE { ?t a dul:Region . ?t hw3:hasPositionX ?x }
+16:48:15 INFO  Fuseki          :: [30] 200 OK (4 ms)

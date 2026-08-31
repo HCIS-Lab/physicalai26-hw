@@ -1,0 +1,63 @@
+{
+  "fk_case_01": [],
+  "fk_case_02": [],
+  "fk_case_03": [],
+  "fk_case_04": [],
+  "fk_case_05": [],
+  "fk_case_06": [
+    "FK_INACCURATE"
+  ],
+  "fk_case_07": [
+    "FK_INACCURATE"
+  ],
+  "fk_case_08": [
+    "FK_INACCURATE"
+  ],
+  "ik_case_01": [],
+  "ik_case_02": [],
+  "ik_case_03": [],
+  "ik_case_04": [],
+  "ik_case_05": [],
+  "ik_case_06": [],
+  "ik_case_07": [],
+  "ik_case_08": [],
+  "ik_case_09": [
+    "ARM_OUT_OF_RANGE"
+  ],
+  "ik_case_10": [
+    "ARM_OUT_OF_RANGE"
+  ],
+  "ik_case_11": [
+    "NO_CONVERGENCE"
+  ],
+  "ik_case_12": [
+    "NO_CONVERGENCE"
+  ],
+  "ik_case_13": [
+    "NO_CONVERGENCE"
+  ],
+  "ik_case_14": [
+    "ARM_OUT_OF_RANGE",
+    "NO_CONVERGENCE"
+  ],
+  "ik_case_15": [
+    "ARM_OUT_OF_RANGE",
+    "NO_CONVERGENCE"
+  ],
+  "ik_case_16": [
+    "ARM_OUT_OF_RANGE",
+    "NO_CONVERGENCE"
+  ],
+  "jl_case_01": [],
+  "jl_case_02": [],
+  "jl_case_03": [
+    "JOINT_LIMIT_VIOLATION"
+  ],
+  "jl_case_04": [
+    "JOINT_LIMIT_VIOLATION"
+  ],
+  "jl_case_05": [],
+  "jl_case_06": [
+    "JOINT_LIMIT_VIOLATION"
+  ]
+}

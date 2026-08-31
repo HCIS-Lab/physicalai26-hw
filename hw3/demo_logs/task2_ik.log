@@ -1,0 +1,67 @@
+current_dir=/media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/pybullet_robot_envs/envs/panda_envs
+============================ Task 2 : Inverse Kinematic ============================
+
+- Testcase file : ik_test_case_easy.json
+- Mean Error : 0.001699
+- Error Count :   0 / 300
+- Your Score Of Inverse Kinematic : 13.333 / 13.333
+
+- Testcase file : ik_test_case_medium.json
+- Mean Error : 0.001135
+- Error Count :   0 / 100
+- Your Score Of Inverse Kinematic : 13.333 / 13.333
+
+- Testcase file : ik_test_case_hard.json
+- Mean Error : 0.000847
+- Error Count :   0 / 100
+- Your Score Of Inverse Kinematic : 13.333 / 13.333
+
+====================================================================================
+- Your Total Score : 40.000 / 40.000
+====================================================================================
+pybullet build time: Sep 22 2020 00:55:20
+startThreads creating 1 threads.
+starting thread 0
+started thread 0 
+argc=2
+argv[0] = --unused
+argv[1] = --start_demo_name=Physics Server
+ExampleBrowserThreadFunc started
+X11 functions dynamically loaded using dlopen/dlsym OK!
+X11 functions dynamically loaded using dlopen/dlsym OK!
+Creating context
+Created GL 3.3 context
+Direct GLX rendering context obtained
+Making context current
+GL_VENDOR=NVIDIA Corporation
+GL_RENDERER=NVIDIA GeForce RTX 4090/PCIe/SSE2
+GL_VERSION=3.3.0 NVIDIA 550.144.03
+GL_SHADING_LANGUAGE_VERSION=3.30 NVIDIA via Cg compiler
+pthread_getconcurrency()=0
+Version = 3.3.0 NVIDIA 550.144.03
+Vendor = NVIDIA Corporation
+Renderer = NVIDIA GeForce RTX 4090/PCIe/SSE2
+b3Printf: Selected demo: Physics Server
+startThreads creating 1 threads.
+starting thread 0
+started thread 0 
+MotionThreadFunc thread started
+ven = NVIDIA Corporation
+ven = NVIDIA Corporation
+numActiveThreads = 0
+stopping threads
+Thread with taskId 0 exiting
+Thread TERMINATED
+destroy semaphore
+semaphore destroyed
+destroy main semaphore
+main semaphore destroyed
+finished
+numActiveThreads = 0
+btShutDownExampleBrowser stopping threads
+Thread with taskId 0 exiting
+destroy semaphore
+Thread TERMINATED
+semaphore destroyed
+destroy main semaphore
+main semaphore destroyed

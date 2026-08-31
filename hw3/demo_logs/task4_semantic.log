@@ -1,0 +1,110 @@
+== STEP 1/7 | Checking toolchain ==
+openjdk version "11.0.31" 2026-04-21
+python + numpy + pybullet OK
+pybullet build time: Sep 22 2020 00:55:20
+
+== STEP 2/7 | Preparing Apache Jena 4.10.0 (with TDB2 tools) ==
+JENA_HOME = /media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/.cache/apache-jena-4.10.0 (45 jars)
+
+== STEP 3/7 | Grounding: per-task evaluation -> RDF graphs ==
+---- ground_task1_fk.py ----
+[FK-EVAL] case 0 -> pose_err=0.000625 jac_err=0.000316 PASS
+[FK-EVAL] case 1 -> pose_err=0.000624 jac_err=0.000316 PASS
+[FK-EVAL] case 2 -> pose_err=0.000626 jac_err=0.000316 PASS
+[GROUND] knowledge graph written to /media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/output/task1_fk_graph.ttl
+pybullet build time: Sep 22 2020 00:55:20
+---- ground_task2_ik.py ----
+current_dir=/media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/pybullet_robot_envs/envs/panda_envs
+[IK-EVAL] target_near -> status=SOLVED, residual=0.0005 m
+[IK-EVAL] target_mid -> status=OUT_OF_REACH, residual=0.5569 m
+[IK-EVAL] target_far -> status=OUT_OF_REACH, residual=1.9547 m
+[GROUND] knowledge graph written to /media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/output/task2_ik_graph.ttl
+pybullet build time: Sep 22 2020 00:55:20
+---- ground_task3_insertion.py ----
+[TASK3-EVAL] grounding 10 episodes from block-insertion-easy-transporter-1000-0-20000.pkl
+[TASK3-EVAL] episode 0 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 1 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 2 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 3 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 4 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 5 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 6 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 7 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 8 -> reward=1.0 SUCCESS
+[TASK3-EVAL] episode 9 -> reward=1.0 SUCCESS
+[GROUND] knowledge graph written to /media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/semantic/output/task3_insertion_graph.ttl
+
+== STEP 4/7 | OWL reasoning (Java Jena) -> inferred_graph.ttl ==
+[LOAD] 202 triples from ontology/hw3-ontology.ttl
+[LOAD] 75 triples from output/task1_fk_graph.ttl
+[LOAD] 21 triples from output/task2_ik_graph.ttl
+[LOAD] 60 triples from output/task3_insertion_graph.ttl
+[LOAD] 60 triples from ontology/ta-robot-graph.ttl
+[REASON] ontology + data are consistent
+[EXPORT] inferred graph (1687 triples) written to output/inferred_graph.ttl
+
+== STEP 5/7 | Loading the TDB2 triple store (semantic/store/) ==
+15:08:55 INFO  loader          :: Loader = LoaderPhased
+15:08:55 INFO  loader          :: Start: output/inferred_graph.ttl
+15:08:55 INFO  loader          :: Finished: output/inferred_graph.ttl: 1,687 tuples in 0.13s (Avg: 12,976)
+15:08:55 INFO  loader          :: Finish - index SPO
+15:08:55 INFO  loader          :: Start replay index SPO
+15:08:55 INFO  loader          :: Index set:  SPO => SPO->POS, SPO->OSP
+15:08:55 INFO  loader          :: Index set:  SPO => SPO->POS, SPO->OSP [1,687 items, 0.0 seconds]
+15:08:55 INFO  loader          :: Finish - index POS
+15:08:55 INFO  loader          :: Finish - index OSP
+
+== STEP 6/7 | SPARQL queries against the triple store ==
+
+---- q1_robot_specs ----
+------------------------------------------------------------------------------------------------
+| robot                                           | producedBy              | dof | jointCount |
+================================================================================================
+| <http://taica.course/hw3/data/313551000#my_ur5> | "313551000"             | 6   | 6          |
+| <http://taica.course/hw3/data/ta#ta_ur10>       | "ta-reference-pipeline" | 6   | 6          |
+------------------------------------------------------------------------------------------------
+
+---- q2_reachable_targets ----
+--------------------------------------------------------------------------------
+| robot                                           | target          | residual |
+================================================================================
+| <http://taica.course/hw3/data/313551000#my_ur5> | hw3:target_near | 5.3E-4   |
+| <http://taica.course/hw3/data/ta#ta_ur10>       | hw3:target_mid  | 0.0038e0 |
+| <http://taica.course/hw3/data/ta#ta_ur10>       | hw3:target_near | 0.0012e0 |
+--------------------------------------------------------------------------------
+
+---- q3_interop_compare ----
+--------------------------------------------------------------------------------------
+| target          | robot                                           | status         |
+======================================================================================
+| hw3:target_far  | <http://taica.course/hw3/data/313551000#my_ur5> | "OUT_OF_REACH" |
+| hw3:target_far  | <http://taica.course/hw3/data/ta#ta_ur10>       | "OUT_OF_REACH" |
+| hw3:target_mid  | <http://taica.course/hw3/data/313551000#my_ur5> | "OUT_OF_REACH" |
+| hw3:target_mid  | <http://taica.course/hw3/data/ta#ta_ur10>       | "SOLVED"       |
+| hw3:target_near | <http://taica.course/hw3/data/313551000#my_ur5> | "SOLVED"       |
+| hw3:target_near | <http://taica.course/hw3/data/ta#ta_ur10>       | "SOLVED"       |
+--------------------------------------------------------------------------------------
+
+---- q4_task_evaluation_report ----
+-----------------------------------
+| evalClass               | count |
+===================================
+| hw3:PassedFKComputation | 3     |
+| hw3:SolvedIKComputation | 1     |
+| hw3:SuccessfulEpisode   | 10    |
+-----------------------------------
+
+== STEP 7/7 | Scoring Task 4 ==
+======================================================================
+  Task 4 : Semantic Robot Knowledge and Triple Store
+======================================================================
+  [S1] q1 robot summary ................ OK  (+2)
+  [S1] DH parameters (6 / 6 joints) ..... OK (+6)
+  [S2] Task 1 FK evaluation (3/3 PASS) . OK  (+4.0)
+  [S2] Task 2 IK statuses (3/3) ......... OK  (+4.0)
+  [S2] q2 inferred SolvedIKComputation . OK  (+2)
+  [S2] Task 3 episodes (10 SUCCESS) ..... OK  (+2)
+  [S3] q3 interop comparison matrix .... OK  (+10)
+----------------------------------------------------------------------
+  Your Task 4 Score : 30.0 / 30.0
+======================================================================

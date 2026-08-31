@@ -1,0 +1,439 @@
+% ============================================================================
+% HW3 — Formal Semantics of the Ontology Vocabulary and the SHACL Layer
+% TA INTERNAL — DO NOT DISTRIBUTE TO STUDENTS.
+% Companion to TA_INTERNAL_GUIDE.md §4.4 (ontology) and §4.5 (SHACL).
+% Build:  pdflatex ta-formal-semantics.tex   (twice, for cross-references)
+% ============================================================================
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[margin=2.6cm]{geometry}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+
+\newtheorem{definition}{Definition}[section]
+\newtheorem{remark}[definition]{Remark}
+\newtheorem{lemma}[definition]{Lemma}
+\newtheorem{convention}[definition]{Convention}
+
+% ---- shorthand macros ------------------------------------------------------
+\newcommand{\IRI}[1]{\textsf{#1}}                    % IRIs / vocabulary terms
+\newcommand{\lit}[1]{\text{``}#1\text{''}}           % literals
+\newcommand{\graph}{G}
+\newcommand{\shapes}{\mathcal{S}}
+\newcommand{\Deltares}{\Delta}
+\newcommand{\dtype}{\mathrm{dt}}
+\newcommand{\vio}{\mathrm{viol}}
+\newcommand{\flags}{\mathrm{flags}}
+\newcommand{\dbl}{\IRI{xsd{:}double}}
+\newcommand{\seteq}{\stackrel{\text{set}}{=}}
+
+\title{\textbf{HW3 Formal Semantics}\\[2pt]
+\large Ontology Vocabulary and SHACL Validation, Stated Mathematically\\[4pt]
+\normalsize NYCU Physical AI / TAICA --- TA INTERNAL, DO NOT DISTRIBUTE}
+\author{Course Staff}
+\date{Version 2026-fall-3.0 (matches \texttt{hw3-ontology.ttl} and the released shapes)}
+
+\begin{document}
+\sloppy
+\maketitle
+
+\noindent
+This note restates, with mathematical precision, what the course materials define
+operationally: the vocabulary of \texttt{semantic/ontology/hw3-ontology.ttl}
+(\S\ref{sec:vocab}--\S\ref{sec:wf}) and the meaning of the SHACL layer
+(\S\ref{sec:shacl}--\S\ref{sec:scoring}). Everything here is checkable against the
+released files; nothing introduces new requirements.
+
+% ============================================================================
+\section{Preliminaries: graphs, predicates, literals}
+% ============================================================================
+
+\begin{definition}[Data graph]
+An RDF \emph{data graph} $\graph$ is a finite set of triples $(s,p,o)$ over IRIs,
+blank nodes, and literals. We write $\Deltares(\graph)$ for the set of subjects
+and objects occurring in $\graph$ (the \emph{domain} of discourse).
+\end{definition}
+
+\begin{definition}[Predicate reading]\label{def:pred}
+For a class IRI $C$ and node $x$ we write
+\[
+  C(x) \;\Longleftrightarrow\; (x,\ \IRI{rdf{:}type},\ C) \in \graph ,
+\]
+and for a property IRI $p$ and nodes/literals $x,y$,
+\[
+  p(x,y) \;\Longleftrightarrow\; (x,\ p,\ y) \in \graph .
+\]
+All quantifiers in this note range over $\Deltares(\graph)$ of the graph being
+validated, and \textbf{only} over it (closed world; see \S\ref{sec:cwa}).
+No inference is applied: $C(x)$ requires the \emph{explicit} typing triple, and
+subclass axioms of \S\ref{sec:vocab} do \emph{not} extend the extension of $C$
+during validation.
+\end{definition}
+
+\begin{definition}[Typed literals]
+A literal $v$ carries a datatype $\dtype(v)$. Numeric comparison $v \le c$ is
+defined for numeric datatypes (\IRI{xsd{:}double}, \IRI{xsd{:}decimal},
+\IRI{xsd{:}integer}, \ldots) by their value spaces; for non-numeric $v$ the
+comparison is \emph{undefined}. The course serializers emit every float as
+$\lit{r}^{\wedge\wedge}\dbl$; a bare Turtle decimal such as \texttt{0.0892} has
+$\dtype = \IRI{xsd{:}decimal}$ --- numerically comparable, but datatype-distinct
+(this distinction matters in Def.~\ref{def:datatype}).
+\end{definition}
+
+% ============================================================================
+\section{The vocabulary (signature)}\label{sec:vocab}
+% ============================================================================
+
+The signature $\Sigma = (\mathbf{C}, \mathbf{P}_o, \mathbf{P}_d)$ consists of
+class names, object properties, and datatype properties. Reused terms keep their
+original IRIs (declared as offline stubs); $\IRI{hw3{:}}$ mints only what no
+standard covers.
+
+\subsection{Classes}
+
+\begin{center}\small
+\begin{tabular}{@{}llll@{}}
+\toprule
+Class & Origin & Subclass axioms & Intended extension \\
+\midrule
+$\IRI{cora{:}Robot}$          & IEEE 1872 CORA & --- & the UR5 individual \\
+$\IRI{soma{:}Joint}$          & SOMA & --- & kinematic joints \\
+$\IRI{soma{:}RevoluteJoint}$  & SOMA & $\sqsubseteq \IRI{soma{:}Joint}$ & the six UR5 joints \\
+$\IRI{soma{:}JointState}$     & SOMA & --- & one angle of one joint \\
+$\IRI{soma{:}6DPose}$         & SOMA & $\sqsubseteq \IRI{dul{:}Region},\ \sqsubseteq \IRI{pos{:}Pose}$ & pose nodes \\
+$\IRI{hw3{:}KinematicComputation}$ & minted & $\sqsubseteq \IRI{dul{:}Event}$ & FK/IK occurrences \\
+$\IRI{hw3{:}FKComputation}$   & minted & $\sqsubseteq \IRI{hw3{:}KinematicComputation}$ & FK executions \\
+$\IRI{hw3{:}IKComputation}$   & minted & $\sqsubseteq \IRI{hw3{:}KinematicComputation}$ & IK executions \\
+$\IRI{hw3{:}JointConfiguration}$ & minted & --- & full-arm configurations \\
+$\IRI{hw3{:}QuaternionOrientation}$ & minted & $\sqsubseteq \IRI{pos{:}Orientation}$ & $(q_x,q_y,q_z,q_w)$ nodes \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Subclass axioms are \emph{modelling documentation}: they align minted terms to the
+upper level (DUL) and to the reused standards, but by Def.~\ref{def:pred} they play
+no role in validation. The serializers therefore always assert the most specific
+class expected by the shapes.
+
+\subsection{Object properties $\mathbf{P}_o$ (with signatures $p \subseteq C \times D$)}
+
+\begin{center}\small
+\begin{tabular}{@{}lll@{}}
+\toprule
+Property & Signature & Super-property \\
+\midrule
+$\IRI{hw3{:}hasJoint}$ & $\IRI{cora{:}Robot} \times \IRI{soma{:}Joint}$ & $\sqsubseteq \IRI{dul{:}hasComponent}$ \\
+$\IRI{hw3{:}computedForRobot}$ & $\IRI{hw3{:}KinematicComputation} \times \IRI{cora{:}Robot}$ & $\sqsubseteq \IRI{dul{:}involvesAgent}$ \\
+$\IRI{hw3{:}solvesForTarget}$ & $\IRI{hw3{:}IKComputation} \times \IRI{soma{:}6DPose}$ & $\sqsubseteq \IRI{dul{:}hasRegion}$ \\
+$\IRI{hw3{:}hasInputJointConfiguration}$ & $\IRI{hw3{:}FKComputation} \times \IRI{hw3{:}JointConfiguration}$ & \\
+$\IRI{hw3{:}hasJointConfiguration}$ & $\IRI{hw3{:}IKComputation} \times \IRI{hw3{:}JointConfiguration}$ & \\
+$\IRI{hw3{:}hasEndEffectorPose}$ & $\IRI{hw3{:}KinematicComputation} \times \IRI{soma{:}6DPose}$ & \\
+$\IRI{hw3{:}hasJointState}$ & $\IRI{hw3{:}JointConfiguration} \times \IRI{soma{:}JointState}$ & $\sqsubseteq \IRI{dul{:}hasComponent}$ \\
+$\IRI{hw3{:}isStateOfJoint}$ & $\IRI{soma{:}JointState} \times \IRI{soma{:}Joint}$ & \\
+$\IRI{hw3{:}hasPositionComponent}$ & $\IRI{pos{:}Pose} \times \IRI{pos{:}Position}$ & \\
+$\IRI{hw3{:}hasOrientationComponent}$ & $\IRI{pos{:}Pose} \times \IRI{pos{:}Orientation}$ & \\
+$\IRI{qudt{:}hasUnit}$ & (any) $\times\ \{\IRI{unit{:}M}, \IRI{unit{:}RAD}\}$ & \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection{Datatype properties $\mathbf{P}_d$ (with signatures $p \subseteq C \times \mathit{val}(d)$)}
+
+\begin{center}\footnotesize
+\begin{tabular}{@{}llll@{}}
+\toprule
+Property & Domain & Range & Read by \\
+\midrule
+$\IRI{hw3{:}hasDoF}$ & $\IRI{cora{:}Robot}$ & \IRI{xsd{:}integer} & \textsf{STRUCTURE} \\
+$\IRI{hw3{:}jointIndex}$ & $\IRI{soma{:}Joint}$ & \IRI{xsd{:}integer} & \textsf{STRUCTURE} \\
+$\IRI{hw3{:}dh\_a},\ \IRI{hw3{:}dh\_d},\ \IRI{hw3{:}dh\_alpha}$ & $\IRI{soma{:}Joint}$ & \dbl & \textsf{STRUCTURE} \\
+$\IRI{hw3{:}hasJointLowerLimit},\ \IRI{hw3{:}hasJointUpperLimit}$ & $\IRI{soma{:}Joint}$ & \dbl & $\Phi_{\mathrm{JL}}$ (Def.~\ref{def:jl}) \\
+$\IRI{soma{:}hasJointPosition}$ & $\IRI{soma{:}JointState}$ & \dbl & $\Phi_{\mathrm{JL}}$ \\
+$\IRI{hw3{:}hasIKStatus}$ & $\IRI{hw3{:}IKComputation}$ & \IRI{xsd{:}string} & informational \\
+$\IRI{hw3{:}hasResidual}$ & $\IRI{hw3{:}KinematicComputation}$ & \dbl & $\Phi_{\mathrm{NC}}$ \\
+$\IRI{hw3{:}hasTargetDistance}$ & $\IRI{hw3{:}IKComputation}$ & \dbl & $\Phi_{\mathrm{AR}}$ \\
+$\IRI{hw3{:}hasPoseError},\ \IRI{hw3{:}hasJacobianError}$ & $\IRI{hw3{:}FKComputation}$ & \dbl & $\Phi_{\mathrm{FK}}$ \\
+$\IRI{hw3{:}hasPositionX/Y/Z}$ & $\IRI{pos{:}Position}$ & \dbl & \textsf{STRUCTURE} \\
+$\IRI{hw3{:}hasQuatX/Y/Z/W}$ & $\IRI{hw3{:}QuaternionOrientation}$ & \dbl & --- \\
+$\IRI{hw3{:}producedBy}$ & (any) & \IRI{xsd{:}string} & provenance \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% ============================================================================
+\section{Well-formed grounding graphs}\label{sec:wf}
+% ============================================================================
+
+The following definitions state what a correct \texttt{data.ttl} \emph{is}; the
+\textsf{STRUCTURE} shapes of \S\ref{sec:structure} are their operational check.
+Fix constants: number of joints $n = 6$; course thresholds
+$\theta_{\mathrm{FK}} = 0.005$, $\theta_{\mathrm{AR}} = 0.90$,
+$\theta_{\mathrm{NC}} = 0.02$ (metres).
+
+\begin{definition}[Robot specification]\label{def:robot}
+A node $r$ is a \emph{well-formed robot specification} iff
+$\IRI{cora{:}Robot}(r)$, $\IRI{hw3{:}producedBy}(r,\cdot)$,
+$\IRI{hw3{:}hasDoF}(r, 6)$, and
+\begin{gather*}
+  \bigl|\{\, j : \IRI{hw3{:}hasJoint}(r,j) \,\}\bigr| = 6, \\
+  \forall j\ \bigl[\IRI{hw3{:}hasJoint}(r,j) \rightarrow \IRI{soma{:}RevoluteJoint}(j)\bigr],
+\end{gather*}
+and every such $j$ carries $\IRI{hw3{:}jointIndex}$,
+$\IRI{hw3{:}dh\_a/d/alpha}$, and both limit values, each with the exact
+datatype of its range column above.
+\end{definition}
+
+\begin{definition}[Joint configuration]\label{def:jc}
+A node $c$ is a \emph{well-formed joint configuration} iff
+$\IRI{hw3{:}JointConfiguration}(c)$ and
+\begin{gather*}
+  \bigl|\{\, s : \IRI{hw3{:}hasJointState}(c,s) \,\}\bigr| = 6, \\
+  \forall s\ \bigl[\IRI{hw3{:}hasJointState}(c,s) \rightarrow
+     \IRI{soma{:}JointState}(s) \\
+  \qquad\qquad \wedge\ \exists j\, \IRI{hw3{:}isStateOfJoint}(s,j)
+     \wedge \exists v\, \IRI{soma{:}hasJointPosition}(s,v) \bigr].
+\end{gather*}
+\end{definition}
+
+\begin{definition}[Structured pose]\label{def:pose}
+A node $\pi$ is a \emph{well-formed pose} iff $\IRI{soma{:}6DPose}(\pi)$ and
+$\exists\, \rho\ [\IRI{hw3{:}hasPositionComponent}(\pi,\rho) \wedge
+\IRI{pos{:}Position}(\rho) \wedge
+\IRI{hw3{:}hasPositionX/Y/Z}(\rho,\cdot)]$, with an analogous orientation
+component. No pose, configuration, or numeric vector is ever encoded as a
+string literal (\emph{no-JSON-strings rule}).
+\end{definition}
+
+\begin{definition}[FK / IK computation records]\label{def:comp}
+$x$ is a well-formed \emph{FK record} iff $\IRI{hw3{:}FKComputation}(x)$ with
+exactly one input configuration (Def.~\ref{def:jc}), exactly one end-effector
+pose (Def.~\ref{def:pose}), and \dbl-typed
+$\IRI{hw3{:}hasPoseError}$, $\IRI{hw3{:}hasJacobianError}$, plus provenance.
+$x$ is a well-formed \emph{IK record} iff $\IRI{hw3{:}IKComputation}(x)$ with
+one target link, one output configuration, a status string, and \dbl-typed
+$\IRI{hw3{:}hasResidual}$, $\IRI{hw3{:}hasTargetDistance}$, plus provenance.
+\end{definition}
+
+% ============================================================================
+\section{SHACL validation, formally}\label{sec:shacl}
+% ============================================================================
+
+\subsection{The validation function}
+
+\begin{definition}[Validation]\label{def:validation}
+Given a shapes graph $\shapes$ and data graph $\graph$, validation computes a
+finite set of \emph{results}
+\begin{multline*}
+  \mathrm{Report}(\shapes, \graph) \;=\;
+  \{\, (x,\ m,\ p,\ v)\ : \\
+  \text{focus node } x \text{ violates a constraint with
+  message } m \text{ on path } p \text{ at value } v \,\},
+\end{multline*}
+and $\mathrm{conforms}(\shapes,\graph) \Leftrightarrow
+\mathrm{Report}(\shapes,\graph) = \emptyset$. For a shape with
+$\IRI{sh{:}targetClass}\ C$, the focus nodes are $\{x : C(x)\}$ (explicit typing
+only, Def.~\ref{def:pred}); for each
+$\IRI{sh{:}property}\,[\,\IRI{sh{:}path}\ p\,;\ldots]$ the \emph{value nodes} of
+$x$ are $\{v : p(x,v)\}$. \textbf{Each} failing value node contributes one
+result --- results are per-violation, not per-shape.
+\end{definition}
+
+\subsection{Constraint components used in this course}
+
+\begin{definition}[Value range, $\IRI{sh{:}maxInclusive}\ c$]\label{def:maxinc}
+\[
+  \mathrm{ok}(x) \;\Longleftrightarrow\; \forall v\, \bigl[p(x,v) \rightarrow v \le c\bigr],
+  \qquad
+  \vio(x,v) \;\Longleftrightarrow\; p(x,v) \wedge \neg (v \le c).
+\]
+Note $\neg(v \le c)$, not $v > c$: an incomparable $v$ (e.g.\ a string) also
+violates. The exclusive variant $\IRI{sh{:}maxExclusive}$ replaces $v \le c$ by
+$v < c$; the S3 boundary records ($v = c$ exactly) separate the two.
+\end{definition}
+
+\begin{definition}[Cardinality, $\IRI{sh{:}minCount}\ m$ / $\IRI{sh{:}maxCount}\ k$]
+\[
+  \mathrm{ok}(x) \;\Longleftrightarrow\;
+  m \;\le\; \bigl|\{\, v : p(x,v) \,\}\bigr| \;\le\; k .
+\]
+\end{definition}
+
+\begin{definition}[Datatype, $\IRI{sh{:}datatype}\ d$]\label{def:datatype}
+\[
+  \mathrm{ok}(x) \;\Longleftrightarrow\; \forall v\, \bigl[p(x,v) \rightarrow
+  v \text{ is a literal} \wedge \dtype(v) = d\bigr].
+\]
+This is datatype \emph{identity}: $\dtype(\texttt{0.0892}) = \IRI{xsd{:}decimal}
+\ne \dbl$, hence the classic \textsf{STRUCTURE} deduction, even though the same
+value passes every numeric comparison of Def.~\ref{def:maxinc}.
+\end{definition}
+
+\begin{definition}[Class, $\IRI{sh{:}class}\ C$]
+$\mathrm{ok}(x) \Leftrightarrow \forall y\,[p(x,y) \rightarrow C(y)]$, with
+$C(y)$ explicit as always.
+\end{definition}
+
+\begin{definition}[SPARQL constraint, $\IRI{sh{:}sparql}$]\label{def:sparql}
+A query $Q(\mathit{this})$ is evaluated once per focus node $x$ with
+$\mathit{this} \mapsto x$; \textbf{every solution mapping} $\mu$ of $Q$ yields
+one violation $(x, m, -, \mu)$. Thus $Q$'s body must be the \emph{negation} of
+the conformance condition.
+\end{definition}
+
+\subsection{Closed world}\label{sec:cwa}
+
+\begin{convention}[Negation as failure]
+Validation treats $\graph$ as a complete description: a triple not in $\graph$
+is false. Contrast OWL's open-world reading, under which absence is unknown ---
+and under which numeric comparison is not even expressible. Hence the course
+invariant: \emph{the ontology carries no thresholds and no cardinalities; all
+checking is SHACL} (TA guide \S4.4).
+\end{convention}
+
+\begin{lemma}[Vacuous conformance]\label{lem:vacuous}
+If $x$ has no $p$-value, then $x$ satisfies every value-range, datatype, and
+class constraint on $p$ (the universal quantifier is vacuous), and violates a
+$\IRI{sh{:}minCount}\ m$ constraint with $m \ge 1$. Presence and correctness
+are therefore enforced by \emph{different} shapes, and both are needed.
+\end{lemma}
+
+% ============================================================================
+\section{The course shapes as formulas}\label{sec:formulas}
+% ============================================================================
+
+\subsection{Problem shapes (student \texttt{shapes.ttl})}
+
+\begin{definition}[FK accuracy, worked example]
+\[
+  \Phi_{\mathrm{FK}}:\quad
+  \forall x\,\forall v\ \bigl[\IRI{hw3{:}FKComputation}(x) \wedge
+  \IRI{hw3{:}hasPoseError}(x,v) \;\rightarrow\; v \le \theta_{\mathrm{FK}}\bigr]
+\]
+with flag \textsf{FK\_INACCURATE} on each violation.
+\end{definition}
+
+\begin{definition}[Arm out of range, TODO~1]
+\begin{gather*}
+  \Phi_{\mathrm{AR}}:\quad
+  \forall x\,\forall v\ \bigl[\IRI{hw3{:}IKComputation}(x) \wedge
+  \IRI{hw3{:}hasTargetDistance}(x,v) \;\rightarrow\; v \le \theta_{\mathrm{AR}}\bigr] \\
+  \text{flag \textsf{ARM\_OUT\_OF\_RANGE}}.
+\end{gather*}
+\end{definition}
+
+\begin{definition}[No convergence, TODO~2]
+\begin{gather*}
+  \Phi_{\mathrm{NC}}:\quad
+  \forall x\,\forall v\ \bigl[\IRI{hw3{:}IKComputation}(x) \wedge
+  \IRI{hw3{:}hasResidual}(x,v) \;\rightarrow\; v \le \theta_{\mathrm{NC}}\bigr] \\
+  \text{flag \textsf{NO\_CONVERGENCE}}.
+\end{gather*}
+\end{definition}
+
+\begin{definition}[Joint limit, TODO~3, SHACL-SPARQL]\label{def:jl}
+\begin{gather*}
+  \Phi_{\mathrm{JL}}:\quad
+  \forall s\,\forall v\,\forall j\,\forall \ell\,\forall u\
+  \Bigl[\, \IRI{soma{:}JointState}(s) \wedge \IRI{soma{:}hasJointPosition}(s,v)
+  \wedge \IRI{hw3{:}isStateOfJoint}(s,j) \\
+  \wedge\ \IRI{hw3{:}hasJointLowerLimit}(j,\ell) \wedge
+  \IRI{hw3{:}hasJointUpperLimit}(j,u)
+  \;\rightarrow\; \ell \le v \le u \,\Bigr] \\
+  \text{flag \textsf{JOINT\_LIMIT\_VIOLATION}}.
+\end{gather*}
+SHACL Core relates a focus node only to its own values; $\Phi_{\mathrm{JL}}$
+joins values across two nodes ($s$ and $j$), so it is realised as a SPARQL
+constraint whose \texttt{FILTER} is the negation of the consequent:
+\texttt{FILTER (?v < ?lo || ?v > ?hi)} (Def.~\ref{def:sparql}). Limits are
+inclusive; a non-strict filter (\texttt{<=}, \texttt{>=}) implements
+$\ell < v < u$ and falsely flags the boundary record \texttt{jl\_case\_02}
+($v = u$ exactly). By closed world (Lemma~\ref{lem:vacuous}), a joint state whose
+joint declares no limits yields no query solution and conforms vacuously; on
+\texttt{data.ttl} Def.~\ref{def:robot} guarantees limits exist.
+\end{definition}
+
+\subsection{Structure shapes (TA \texttt{ta-shapes-full.ttl})}\label{sec:structure}
+
+The \textsf{STRUCTURE} shapes are exactly the operational encodings of
+Definitions~\ref{def:robot}--\ref{def:comp}, assembled from the components of
+\S\ref{sec:shacl}: e.g.\ ``a robot has exactly six revolute joints'' is
+$\IRI{sh{:}minCount}\,6 \wedge \IRI{sh{:}maxCount}\,6 \wedge \IRI{sh{:}class}\,
+\IRI{soma{:}RevoluteJoint}$ on path $\IRI{hw3{:}hasJoint}$; every numeric
+requirement of Def.~\ref{def:comp} is $\IRI{sh{:}minCount}\,1 \wedge
+\IRI{sh{:}datatype}\,\dbl$. The TA suite additionally contains the problem
+shapes $\Phi_{\mathrm{AR}}, \Phi_{\mathrm{NC}}$ (for S2) and its own copy of
+$\Phi_{\mathrm{JL}}$.
+
+% ============================================================================
+\section{Flags, answer key, and scoring semantics}\label{sec:scoring}
+% ============================================================================
+
+\begin{convention}[Flag extraction]\label{conv:flag}
+For a result $(x, m, p, v)$, the machine-readable flag is the prefix of $m$
+before the first colon. For a record identifier $\iota$ (e.g.\
+\texttt{ik\_case\_09}),
+\[
+  \flags(\iota) \;=\; \{\, \mathrm{prefix}(m) \ :\ (x,m,p,v) \in
+  \mathrm{Report}(\shapes_{\mathrm{student}},\ \graph_{\mathrm{TA}}),\
+  \iota \text{ is a substring of } x \,\}.
+\]
+Identifiers keep a fixed digit width so that the substring relation is a
+bijection onto records.
+\end{convention}
+
+\begin{definition}[S3 --- answer-key agreement]
+Let $K : \mathcal{I} \to 2^{F}$ be the answer key over record set
+$\mathcal{I}$ ($|\mathcal{I}| = 30$), $F$ the four flags, and let
+$\mathcal{I}^{+} = \{\iota : K(\iota) \ne \emptyset\}$ ($|\mathcal{I}^{+}|=14$),
+$\mathcal{I}^{0} = \mathcal{I} \setminus \mathcal{I}^{+}$
+($|\mathcal{I}^{0}|=16$). A record is \emph{correct} iff
+$\flags(\iota) \seteq K(\iota)$ (set equality: no false positives, no false
+negatives). Then
+\[
+  S_3 \;=\; 8 \cdot
+  \frac{|\{\iota \in \mathcal{I}^{+} : \flags(\iota) \seteq K(\iota)\}|}{|\mathcal{I}^{+}|}
+  \;+\; 2 \cdot
+  \frac{|\{\iota \in \mathcal{I}^{0} : \flags(\iota) \seteq K(\iota)\}|}{|\mathcal{I}^{0}|}
+  \;\in\; [0, 10].
+\]
+\end{definition}
+
+\begin{definition}[S1, S2, and the Task 1 score]
+With $V_{\mathrm{STRUCT}}$ the set of \textsf{STRUCTURE}-prefixed results of the
+TA suite on the student's \texttt{data.ttl}:
+\begin{gather*}
+  S_1 = \max\bigl(0,\ 12 - 2\,|V_{\mathrm{STRUCT}}|\bigr), \\
+  S_2 = 2\,[\,\textsf{AR}@\mathit{mid}\,] + 2\,[\,\textsf{AR}@\mathit{far}\,]
+      + 2\,[\,\mathit{near}\ \text{clean}\,] + 2\,[\,\textsf{JL} \text{ absent}\,],
+\end{gather*}
+where $[\cdot]$ is the Iverson bracket, and the Task 1 score is
+$S_1 + S_2 + S_3 \in [0,30]$ with pass gate (exit code $0$) at $\ge 29.9$.
+Note $\mathrm{conforms}$ itself is \emph{not} the gate: a correct solution's own
+data legitimately contains four violations (\emph{mid}/\emph{far} genuinely lie
+beyond $\theta_{\mathrm{AR}}$).
+\end{definition}
+
+\begin{remark}[Tasks 2--4 feedback bridge]
+The diagnosis of \texttt{diagnose.py} evaluates
+$\mathrm{Report}(\shapes_{\mathrm{student}},\ \graph_{\mathrm{exec}})$ where
+$\graph_{\mathrm{exec}}$ is built, at run time, by the student's own grounding
+functions from the numeric execution records of Tasks 2--4, and prints
+$\flags(\iota)$ per record. Formally it is the same validation function
+(Def.~\ref{def:validation}) applied to a freshly grounded graph --- no separate
+mechanism.
+\end{remark}
+
+\begin{remark}[Relation to description logic]
+Each $\Phi$ of \S\ref{sec:formulas} lies in the two-variable-with-counting
+fragment of FOL except $\Phi_{\mathrm{JL}}$ (five variables, a genuine join),
+which is exactly why it exceeds SHACL Core and OWL alike and requires the SPARQL
+escape hatch. The ontology's subclass axioms are ordinary $\mathcal{ALC}$ TBox
+inclusions; they document intent but, under closed-world validation without
+inference, carry no operational weight.
+\end{remark}
+
+\end{document}

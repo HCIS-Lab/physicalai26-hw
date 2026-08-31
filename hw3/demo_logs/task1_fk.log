@@ -1,0 +1,19 @@
+current_dir=/media/hcis-s15/ssd22/test/physical-ai25/hw3_demo/pybullet_robot_envs/envs/panda_envs
+============================ Task 1 : Forward Kinematic ============================
+
+- Testcase file : fk_test_case_easy.json
+- Your Score Of Forward Kinematic : 3.333 / 3.333, Error Count :    0 /  300
+- Your Score Of Jacobian Matrix   : 3.333 / 3.333, Error Count :    0 /  300
+
+- Testcase file : fk_test_case_medium.json
+- Your Score Of Forward Kinematic : 3.333 / 3.333, Error Count :    0 /  100
+- Your Score Of Jacobian Matrix   : 3.333 / 3.333, Error Count :    0 /  100
+
+- Testcase file : fk_test_case_hard.json
+- Your Score Of Forward Kinematic : 3.333 / 3.333, Error Count :    0 /  100
+- Your Score Of Jacobian Matrix   : 3.333 / 3.333, Error Count :    0 /  100
+
+====================================================================================
+- Your Total Score : 20.000 / 20.000
+====================================================================================
+pybullet build time: Sep 22 2020 00:55:20

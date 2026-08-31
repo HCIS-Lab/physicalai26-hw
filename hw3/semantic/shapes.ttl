@@ -1,0 +1,61 @@
+@prefix sh:   <http://www.w3.org/ns/shacl#> .
+@prefix hw3:  <http://taica.course/hw3/ontology#> .
+@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
+@prefix soma: <http://www.ease-crc.org/ont/SOMA.owl#> .
+
+# =============================================================================
+# Task 1 / SHACL — validate the grounded execution data (REFERENCE SOLUTION)
+# =============================================================================
+
+# ---- Worked example: FK accuracy check --------------------------------------
+hw3:FKAccuracyShape a sh:NodeShape ;
+    sh:targetClass hw3:FKComputation ;
+    sh:property [
+        sh:path hw3:hasPoseError ;
+        sh:maxInclusive "0.005"^^xsd:double ;
+        sh:message "FK_INACCURATE: pose error above the 0.005 m course threshold" ;
+    ] .
+
+# ---- Solution 1: arm out of range -------------------------------------------
+hw3:ArmOutOfRangeShape a sh:NodeShape ;
+    sh:targetClass hw3:IKComputation ;
+    sh:property [
+        sh:path hw3:hasTargetDistance ;
+        sh:maxInclusive "0.90"^^xsd:double ;
+        sh:message "ARM_OUT_OF_RANGE: target distance exceeds the UR5 reach (0.90 m)" ;
+    ] .
+
+# ---- Solution 2: not converged ----------------------------------------------
+hw3:NoConvergenceShape a sh:NodeShape ;
+    sh:targetClass hw3:IKComputation ;
+    sh:property [
+        sh:path hw3:hasResidual ;
+        sh:maxInclusive "0.02"^^xsd:double ;
+        sh:message "NO_CONVERGENCE: residual above the 0.02 m course threshold" ;
+    ] .
+
+# ---- Solution 3: joint limit check (SHACL-SPARQL) ---------------------------
+# A JointState's angle is compared with its joint's [lower, upper] limits.
+# SHACL Core cannot compare two values taken from different nodes, so a
+# SPARQL constraint is used. Limits are inclusive: an angle exactly equal to
+# a limit is legal, hence the strict < / > in the FILTER.
+hw3:SparqlPrefixes sh:declare
+    [ sh:prefix "hw3" ;  sh:namespace "http://taica.course/hw3/ontology#"^^xsd:anyURI ] ,
+    [ sh:prefix "soma" ; sh:namespace "http://www.ease-crc.org/ont/SOMA.owl#"^^xsd:anyURI ] .
+
+hw3:JointLimitShape a sh:NodeShape ;
+    sh:targetClass soma:JointState ;
+    sh:sparql [
+        sh:message "JOINT_LIMIT_VIOLATION: joint angle outside the joint's [lower, upper] limits" ;
+        sh:prefixes hw3:SparqlPrefixes ;
+        sh:select """
+            SELECT $this
+            WHERE {
+                $this soma:hasJointPosition ?v ;
+                      hw3:isStateOfJoint ?joint .
+                ?joint hw3:hasJointLowerLimit ?lo ;
+                       hw3:hasJointUpperLimit ?hi .
+                FILTER (?v < ?lo || ?v > ?hi)
+            }
+        """ ;
+    ] .

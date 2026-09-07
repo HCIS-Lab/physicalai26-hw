@@ -11,8 +11,9 @@ Task 1 = 30/30, Task 2 = 20/20, Task 3 = 40/40, Task 4 = 10/10.
 | `ground_solutions.py` | the 2 TODO functions of `semantic/ground_execution.py` | Task 1 grounding solution — injected via the `GROUND_SCRIPT` env var, no file overwrite |
 | `shapes_solution.ttl` | `semantic/shapes.ttl` | Task 1 SHACL solution (ARM_OUT_OF_RANGE + NO_CONVERGENCE + JOINT_LIMIT shapes) |
 
-> Grading workflow, dataset/answer-key maintenance, and student-issue
-> triage live in `hw3_demo/TA_INTERNAL_GUIDE.md`.
+> Grading workflow, deduction rules, and student-issue triage live in the
+> TA edition of the assignment handout (`main.tex` with `\tutornotestrue`,
+> shipped as `hw3_demo/TA.pdf`).
 
 ## Usage
 

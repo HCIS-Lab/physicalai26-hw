@@ -1,0 +1,318 @@
+@prefix : <http://taica.course/hw3/ontology#> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix xml: <http://www.w3.org/XML/1998/namespace> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@base <http://taica.course/hw3/ontology#> .
+
+<http://taica.course/hw3/ontology> rdf:type owl:Ontology ;
+                                    rdfs:comment "Vocabulary for HW3 Task 1 (semantic grounding + SHACL validation): robot specifications and FK/IK execution processes (the solvers themselves are implemented in Tasks 2-3) represented as machine-readable knowledge. Design rule: REUSE existing vocabularies wherever a suitable term exists — IEEE 1872 CORA for robots, SOMA for joints / joint states / poses, IEEE 1872 POS for positions, QUDT for units — and mint hw3: terms only for course-specific concepts (kinematic computations, D-H parameters, statuses, distances) that no standard vocabulary covers."@en ;
+                                    rdfs:label "TAICA HW3 Robot Kinematics Evaluation Ontology"@en ;
+                                    owl:versionInfo "2026-fall-3.1" .
+
+#################################################################
+#    Object Properties
+#################################################################
+
+###  http://taica.course/hw3/ontology#computedForRobot
+:computedForRobot rdf:type owl:ObjectProperty ;
+                  rdfs:domain :KinematicComputation ;
+                  rdfs:range <http://purl.org/ieee1872-owl/cora-bare#Robot> ;
+                  rdfs:label "computed for robot"@en .
+
+
+###  http://taica.course/hw3/ontology#hasEndEffectorPose
+:hasEndEffectorPose rdf:type owl:ObjectProperty ;
+                    rdfs:domain :KinematicComputation ;
+                    rdfs:range <http://www.ease-crc.org/ont/SOMA.owl#6DPose> ;
+                    rdfs:comment "The FK-computed end-effector pose in the world frame, as a structured soma:6DPose node (position component + quaternion orientation component)."@en ;
+                    rdfs:label "has end effector pose"@en .
+
+
+###  http://taica.course/hw3/ontology#hasInputJointConfiguration
+:hasInputJointConfiguration rdf:type owl:ObjectProperty ;
+                            rdfs:domain :FKComputation ;
+                            rdfs:range :JointConfiguration ;
+                            rdfs:comment "The 6 joint angles given to FK, as a structured JointConfiguration node."@en ;
+                            rdfs:label "has input joint configuration"@en .
+
+
+###  http://taica.course/hw3/ontology#hasJoint
+:hasJoint rdf:type owl:ObjectProperty ;
+          rdfs:domain <http://purl.org/ieee1872-owl/cora-bare#Robot> ;
+          rdfs:range <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+          rdfs:label "has joint"@en .
+
+
+###  http://taica.course/hw3/ontology#hasJointConfiguration
+:hasJointConfiguration rdf:type owl:ObjectProperty ;
+                       rdfs:domain :IKComputation ;
+                       rdfs:range :JointConfiguration ;
+                       rdfs:comment "The 6 joint angles returned by IK, as a structured JointConfiguration node."@en ;
+                       rdfs:label "has (output) joint configuration"@en .
+
+
+###  http://taica.course/hw3/ontology#hasJointState
+:hasJointState rdf:type owl:ObjectProperty ;
+               rdfs:domain :JointConfiguration ;
+               rdfs:range <http://www.ease-crc.org/ont/SOMA.owl#JointState> ;
+               rdfs:label "has joint state"@en .
+
+
+###  http://taica.course/hw3/ontology#hasOrientationComponent
+:hasOrientationComponent rdf:type owl:ObjectProperty ;
+                         rdfs:domain <http://purl.org/ieee1872-owl/pos#Pose> ;
+                         rdfs:range <http://purl.org/ieee1872-owl/pos#Orientation> ;
+                         rdfs:label "has orientation component"@en .
+
+
+###  http://taica.course/hw3/ontology#hasPositionComponent
+:hasPositionComponent rdf:type owl:ObjectProperty ;
+                      rdfs:domain <http://purl.org/ieee1872-owl/pos#Pose> ;
+                      rdfs:range <http://purl.org/ieee1872-owl/pos#Position> ;
+                      rdfs:label "has position component"@en .
+
+
+###  http://taica.course/hw3/ontology#isStateOfJoint
+:isStateOfJoint rdf:type owl:ObjectProperty ;
+                rdfs:domain <http://www.ease-crc.org/ont/SOMA.owl#JointState> ;
+                rdfs:range <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+                rdfs:comment "Links a JointState back to the soma:Joint individual (with its D-H parameters) it describes."@en ;
+                rdfs:label "is state of joint"@en .
+
+
+###  http://taica.course/hw3/ontology#solvesForTarget
+:solvesForTarget rdf:type owl:ObjectProperty ;
+                 rdfs:domain :IKComputation ;
+                 rdfs:range <http://www.ease-crc.org/ont/SOMA.owl#6DPose> ;
+                 rdfs:label "solves for target"@en .
+
+
+#################################################################
+#    Data properties
+#################################################################
+
+###  http://taica.course/hw3/ontology#dh_a
+:dh_a rdf:type owl:DatatypeProperty ;
+      rdfs:domain <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+      rdfs:range xsd:double ;
+      rdfs:label "DH link length a (meters)"@en .
+
+
+###  http://taica.course/hw3/ontology#dh_alpha
+:dh_alpha rdf:type owl:DatatypeProperty ;
+          rdfs:domain <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+          rdfs:range xsd:double ;
+          rdfs:label "DH link twist alpha (radians)"@en .
+
+
+###  http://taica.course/hw3/ontology#dh_d
+:dh_d rdf:type owl:DatatypeProperty ;
+      rdfs:domain <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+      rdfs:range xsd:double ;
+      rdfs:label "DH link offset d (meters)"@en .
+
+
+###  http://taica.course/hw3/ontology#hasDoF
+:hasDoF rdf:type owl:DatatypeProperty ;
+        rdfs:domain <http://purl.org/ieee1872-owl/cora-bare#Robot> ;
+        rdfs:range xsd:integer ;
+        rdfs:label "degrees of freedom"@en .
+
+
+###  http://taica.course/hw3/ontology#hasIKStatus
+:hasIKStatus rdf:type owl:DatatypeProperty ;
+             rdfs:domain :IKComputation ;
+             rdfs:range xsd:string ;
+             rdfs:comment "One of: SOLVED, OUT_OF_REACH, NO_CONVERGENCE, JOINT_LIMIT_VIOLATION."@en ;
+             rdfs:label "has IK status"@en .
+
+
+###  http://taica.course/hw3/ontology#hasJacobianError
+:hasJacobianError rdf:type owl:DatatypeProperty ;
+                  rdfs:domain :FKComputation ;
+                  rdfs:range xsd:double ;
+                  rdfs:comment "L2 norm between the computed 6x6 Jacobian and the ground-truth Jacobian (course threshold: 0.05). -1.0 when not computed (reference preview mode)."@en ;
+                  rdfs:label "has Jacobian error"@en .
+
+
+###  http://taica.course/hw3/ontology#hasJointLowerLimit
+:hasJointLowerLimit rdf:type owl:DatatypeProperty ;
+                    rdfs:domain <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+                    rdfs:range xsd:double ;
+                    rdfs:label "joint lower limit (radians)"@en .
+
+
+###  http://taica.course/hw3/ontology#hasJointUpperLimit
+:hasJointUpperLimit rdf:type owl:DatatypeProperty ;
+                    rdfs:domain <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+                    rdfs:range xsd:double ;
+                    rdfs:label "joint upper limit (radians)"@en .
+
+
+###  http://taica.course/hw3/ontology#hasPoseError
+:hasPoseError rdf:type owl:DatatypeProperty ;
+              rdfs:domain :FKComputation ;
+              rdfs:range xsd:double ;
+              rdfs:comment "L2 norm between the computed 7d end-effector pose and the ground-truth pose (course threshold: 0.005)."@en ;
+              rdfs:label "has FK pose error"@en .
+
+
+###  http://taica.course/hw3/ontology#hasPositionX
+:hasPositionX rdf:type owl:DatatypeProperty ;
+              rdfs:domain <http://purl.org/ieee1872-owl/pos#Position> ;
+              rdfs:range xsd:double ;
+              rdfs:label "position x (meters)"@en .
+
+
+###  http://taica.course/hw3/ontology#hasPositionY
+:hasPositionY rdf:type owl:DatatypeProperty ;
+              rdfs:domain <http://purl.org/ieee1872-owl/pos#Position> ;
+              rdfs:range xsd:double ;
+              rdfs:label "position y (meters)"@en .
+
+
+###  http://taica.course/hw3/ontology#hasPositionZ
+:hasPositionZ rdf:type owl:DatatypeProperty ;
+              rdfs:domain <http://purl.org/ieee1872-owl/pos#Position> ;
+              rdfs:range xsd:double ;
+              rdfs:label "position z (meters)"@en .
+
+
+###  http://taica.course/hw3/ontology#hasQuatW
+:hasQuatW rdf:type owl:DatatypeProperty ;
+          rdfs:domain :QuaternionOrientation ;
+          rdfs:range xsd:double ;
+          rdfs:label "quaternion w"@en .
+
+
+###  http://taica.course/hw3/ontology#hasQuatX
+:hasQuatX rdf:type owl:DatatypeProperty ;
+          rdfs:domain :QuaternionOrientation ;
+          rdfs:range xsd:double ;
+          rdfs:label "quaternion x"@en .
+
+
+###  http://taica.course/hw3/ontology#hasQuatY
+:hasQuatY rdf:type owl:DatatypeProperty ;
+          rdfs:domain :QuaternionOrientation ;
+          rdfs:range xsd:double ;
+          rdfs:label "quaternion y"@en .
+
+
+###  http://taica.course/hw3/ontology#hasQuatZ
+:hasQuatZ rdf:type owl:DatatypeProperty ;
+          rdfs:domain :QuaternionOrientation ;
+          rdfs:range xsd:double ;
+          rdfs:label "quaternion z"@en .
+
+
+###  http://taica.course/hw3/ontology#hasReferenceFrame
+:hasReferenceFrame rdf:type owl:DatatypeProperty ;
+                   rdfs:domain <http://purl.org/ieee1872-owl/pos#Pose> ;
+                   rdfs:range xsd:string ;
+                   rdfs:label "has reference frame"@en .
+
+
+###  http://taica.course/hw3/ontology#hasResidual
+:hasResidual rdf:type owl:DatatypeProperty ;
+             rdfs:domain :KinematicComputation ;
+             rdfs:range xsd:double ;
+             rdfs:label "has Cartesian residual error norm (meters)"@en .
+
+
+###  http://taica.course/hw3/ontology#hasTargetDistance
+:hasTargetDistance rdf:type owl:DatatypeProperty ;
+                   rdfs:domain :IKComputation ;
+                   rdfs:range xsd:double ;
+                   rdfs:comment "Distance from the robot's shoulder to the IK target (meters), grounded by the numeric layer. SHACL compares it against the UR5 reach (0.90 m) to detect ARM_OUT_OF_RANGE."@en ;
+                   rdfs:label "has target distance (meters)"@en .
+
+
+###  http://taica.course/hw3/ontology#jointIndex
+:jointIndex rdf:type owl:DatatypeProperty ;
+            rdfs:domain <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+            rdfs:range xsd:integer ;
+            rdfs:label "joint index (1-based)"@en .
+
+
+###  http://taica.course/hw3/ontology#producedBy
+:producedBy rdf:type owl:DatatypeProperty ;
+            rdfs:range xsd:string ;
+            rdfs:comment "Provenance: identifier of the program / student that produced this piece of knowledge. This is what lets independently developed programs publish into the same store and still be told apart."@en ;
+            rdfs:label "produced by"@en .
+
+
+#################################################################
+#    Classes
+#################################################################
+
+###  http://purl.org/ieee1872-owl/cora-bare#Robot
+<http://purl.org/ieee1872-owl/cora-bare#Robot> rdf:type owl:Class ;
+                                               rdfs:label "Robot (IEEE 1872 CORA)"@en .
+
+
+###  http://purl.org/ieee1872-owl/pos#Orientation
+<http://purl.org/ieee1872-owl/pos#Orientation> rdf:type owl:Class .
+
+
+###  http://purl.org/ieee1872-owl/pos#Pose
+<http://purl.org/ieee1872-owl/pos#Pose> rdf:type owl:Class .
+
+
+###  http://purl.org/ieee1872-owl/pos#Position
+<http://purl.org/ieee1872-owl/pos#Position> rdf:type owl:Class .
+
+
+###  http://taica.course/hw3/ontology#FKComputation
+:FKComputation rdf:type owl:Class ;
+               rdfs:subClassOf :KinematicComputation ;
+               rdfs:label "Forward Kinematics Computation"@en .
+
+
+###  http://taica.course/hw3/ontology#IKComputation
+:IKComputation rdf:type owl:Class ;
+               rdfs:subClassOf :KinematicComputation ;
+               rdfs:label "Inverse Kinematics Computation"@en .
+
+
+###  http://taica.course/hw3/ontology#JointConfiguration
+:JointConfiguration rdf:type owl:Class ;
+                    rdfs:comment "A full arm configuration: the aggregation of exactly one soma:JointState per kinematic joint. Each state points back at the joint individual it describes."@en ;
+                    rdfs:label "Joint Configuration"@en .
+
+
+###  http://taica.course/hw3/ontology#KinematicComputation
+:KinematicComputation rdf:type owl:Class ;
+                      rdfs:label "Kinematic Computation"@en .
+
+
+###  http://taica.course/hw3/ontology#QuaternionOrientation
+:QuaternionOrientation rdf:type owl:Class ;
+                       rdfs:subClassOf <http://purl.org/ieee1872-owl/pos#Orientation> ;
+                       rdfs:label "Quaternion Orientation (x, y, z, w)"@en .
+
+
+###  http://www.ease-crc.org/ont/SOMA.owl#Joint
+<http://www.ease-crc.org/ont/SOMA.owl#Joint> rdf:type owl:Class ;
+                                             rdfs:label "Joint (SOMA)"@en .
+
+
+###  http://www.ease-crc.org/ont/SOMA.owl#JointState
+<http://www.ease-crc.org/ont/SOMA.owl#JointState> rdf:type owl:Class .
+
+
+###  http://www.ease-crc.org/ont/SOMA.owl#RevoluteJoint
+<http://www.ease-crc.org/ont/SOMA.owl#RevoluteJoint> rdf:type owl:Class ;
+                                                     rdfs:subClassOf <http://www.ease-crc.org/ont/SOMA.owl#Joint> ;
+                                                     rdfs:label "Revolute Joint (SOMA)"@en .
+
+
+###  http://www.ease-crc.org/ont/SOMA.owl#6DPose
+<http://www.ease-crc.org/ont/SOMA.owl#6DPose> rdf:type owl:Class ;
+                                              rdfs:subClassOf <http://purl.org/ieee1872-owl/pos#Pose> ;
+                                              rdfs:label "6D Pose (SOMA)"@en .
+
+
+###  Generated by the OWL API (version 5.1.18) https://github.com/owlcs/owlapi/

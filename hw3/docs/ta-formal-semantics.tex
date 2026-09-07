@@ -1,7 +1,7 @@
 % ============================================================================
 % HW3 — Formal Semantics of the Ontology Vocabulary and the SHACL Layer
 % TA INTERNAL — DO NOT DISTRIBUTE TO STUDENTS.
-% Companion to TA_INTERNAL_GUIDE.md §4.4 (ontology) and §4.5 (SHACL).
+% Companion to the TA edition of the assignment handout (main.tex / TA.pdf).
 % Build:  pdflatex ta-formal-semantics.tex   (twice, for cross-references)
 % ============================================================================
 \documentclass[11pt,a4paper]{article}
@@ -35,7 +35,7 @@
 \large Ontology Vocabulary and SHACL Validation, Stated Mathematically\\[4pt]
 \normalsize NYCU Physical AI / TAICA --- TA INTERNAL, DO NOT DISTRIBUTE}
 \author{Course Staff}
-\date{Version 2026-fall-3.0 (matches \texttt{hw3-ontology.ttl} and the released shapes)}
+\date{Version 2026-fall-3.0 (matches \texttt{hw3-ontology.ttl} v3.1 and the released shapes)}
 
 \begin{document}
 \sloppy
@@ -104,8 +104,8 @@ $\IRI{cora{:}Robot}$          & IEEE 1872 CORA & --- & the UR5 individual \\
 $\IRI{soma{:}Joint}$          & SOMA & --- & kinematic joints \\
 $\IRI{soma{:}RevoluteJoint}$  & SOMA & $\sqsubseteq \IRI{soma{:}Joint}$ & the six UR5 joints \\
 $\IRI{soma{:}JointState}$     & SOMA & --- & one angle of one joint \\
-$\IRI{soma{:}6DPose}$         & SOMA & $\sqsubseteq \IRI{dul{:}Region},\ \sqsubseteq \IRI{pos{:}Pose}$ & pose nodes \\
-$\IRI{hw3{:}KinematicComputation}$ & minted & $\sqsubseteq \IRI{dul{:}Event}$ & FK/IK occurrences \\
+$\IRI{soma{:}6DPose}$         & SOMA & $\sqsubseteq \IRI{pos{:}Pose}$ & pose nodes \\
+$\IRI{hw3{:}KinematicComputation}$ & minted & --- & FK/IK occurrences \\
 $\IRI{hw3{:}FKComputation}$   & minted & $\sqsubseteq \IRI{hw3{:}KinematicComputation}$ & FK executions \\
 $\IRI{hw3{:}IKComputation}$   & minted & $\sqsubseteq \IRI{hw3{:}KinematicComputation}$ & IK executions \\
 $\IRI{hw3{:}JointConfiguration}$ & minted & --- & full-arm configurations \\
@@ -114,34 +114,33 @@ $\IRI{hw3{:}QuaternionOrientation}$ & minted & $\sqsubseteq \IRI{pos{:}Orientati
 \end{tabular}
 \end{center}
 
-Subclass axioms are \emph{modelling documentation}: they align minted terms to the
-upper level (DUL) and to the reused standards, but by Def.~\ref{def:pred} they play
+Subclass axioms are \emph{modelling documentation}: they align terms to the
+reused standards, but by Def.~\ref{def:pred} they play
 no role in validation. The serializers therefore always assert the most specific
 class expected by the shapes.
 
-\subsection{Object properties $\mathbf{P}_o$ (with signatures $p \subseteq C \times D$)}
+\subsection{Object properties $\mathbf{P}_o$}
 
 \begin{center}\small
 \begin{tabular}{@{}lll@{}}
 \toprule
-Property & Signature & Super-property \\
+Property & Domain & Range \\
 \midrule
-$\IRI{hw3{:}hasJoint}$ & $\IRI{cora{:}Robot} \times \IRI{soma{:}Joint}$ & $\sqsubseteq \IRI{dul{:}hasComponent}$ \\
-$\IRI{hw3{:}computedForRobot}$ & $\IRI{hw3{:}KinematicComputation} \times \IRI{cora{:}Robot}$ & $\sqsubseteq \IRI{dul{:}involvesAgent}$ \\
-$\IRI{hw3{:}solvesForTarget}$ & $\IRI{hw3{:}IKComputation} \times \IRI{soma{:}6DPose}$ & $\sqsubseteq \IRI{dul{:}hasRegion}$ \\
-$\IRI{hw3{:}hasInputJointConfiguration}$ & $\IRI{hw3{:}FKComputation} \times \IRI{hw3{:}JointConfiguration}$ & \\
-$\IRI{hw3{:}hasJointConfiguration}$ & $\IRI{hw3{:}IKComputation} \times \IRI{hw3{:}JointConfiguration}$ & \\
-$\IRI{hw3{:}hasEndEffectorPose}$ & $\IRI{hw3{:}KinematicComputation} \times \IRI{soma{:}6DPose}$ & \\
-$\IRI{hw3{:}hasJointState}$ & $\IRI{hw3{:}JointConfiguration} \times \IRI{soma{:}JointState}$ & $\sqsubseteq \IRI{dul{:}hasComponent}$ \\
-$\IRI{hw3{:}isStateOfJoint}$ & $\IRI{soma{:}JointState} \times \IRI{soma{:}Joint}$ & \\
-$\IRI{hw3{:}hasPositionComponent}$ & $\IRI{pos{:}Pose} \times \IRI{pos{:}Position}$ & \\
-$\IRI{hw3{:}hasOrientationComponent}$ & $\IRI{pos{:}Pose} \times \IRI{pos{:}Orientation}$ & \\
-$\IRI{qudt{:}hasUnit}$ & (any) $\times\ \{\IRI{unit{:}M}, \IRI{unit{:}RAD}\}$ & \\
-\bottomrule
-\end{tabular}
+$\IRI{hw3{:}hasJoint}$ & $\IRI{cora{:}Robot}$ & $\IRI{soma{:}Joint}$ \\
+$\IRI{hw3{:}computedForRobot}$ & $\IRI{hw3{:}KinematicComputation}$ & $\IRI{cora{:}Robot}$ \\
+$\IRI{hw3{:}solvesForTarget}$ & $\IRI{hw3{:}IKComputation}$ & $\IRI{soma{:}6DPose}$ \\
+$\IRI{hw3{:}hasInputJointConfiguration}$ & $\IRI{hw3{:}FKComputation}$ & $\IRI{hw3{:}JointConfiguration}$ \\
+$\IRI{hw3{:}hasJointConfiguration}$ & $\IRI{hw3{:}IKComputation}$ & $\IRI{hw3{:}JointConfiguration}$ \\
+$\IRI{hw3{:}hasEndEffectorPose}$ & $\IRI{hw3{:}KinematicComputation}$ & $\IRI{soma{:}6DPose}$ \\
+$\IRI{hw3{:}hasJointState}$ & $\IRI{hw3{:}JointConfiguration}$ & $\IRI{soma{:}JointState}$ \\
+$\IRI{hw3{:}isStateOfJoint}$ & $\IRI{soma{:}JointState}$ & $\IRI{soma{:}Joint}$ \\
+$\IRI{hw3{:}hasPositionComponent}$ & $\IRI{pos{:}Pose}$ & $\IRI{pos{:}Position}$ \\
+$\IRI{hw3{:}hasOrientationComponent}$ & $\IRI{pos{:}Pose}$ & $\IRI{pos{:}Orientation}$ \\
+$\IRI{qudt{:}hasUnit}$ & (any) & $\{\IRI{unit{:}M}, \IRI{unit{:}RAD}\}$ \\
+\bottomrule\end{tabular}
 \end{center}
 
-\subsection{Datatype properties $\mathbf{P}_d$ (with signatures $p \subseteq C \times \mathit{val}(d)$)}
+\subsection{Datatype properties $\mathbf{P}_d$}
 
 \begin{center}\footnotesize
 \begin{tabular}{@{}llll@{}}
@@ -160,8 +159,7 @@ $\IRI{hw3{:}hasPoseError},\ \IRI{hw3{:}hasJacobianError}$ & $\IRI{hw3{:}FKComput
 $\IRI{hw3{:}hasPositionX/Y/Z}$ & $\IRI{pos{:}Position}$ & \dbl & \textsf{STRUCTURE} \\
 $\IRI{hw3{:}hasQuatX/Y/Z/W}$ & $\IRI{hw3{:}QuaternionOrientation}$ & \dbl & --- \\
 $\IRI{hw3{:}producedBy}$ & (any) & \IRI{xsd{:}string} & provenance \\
-\bottomrule
-\end{tabular}
+\bottomrule\end{tabular}
 \end{center}
 
 % ============================================================================

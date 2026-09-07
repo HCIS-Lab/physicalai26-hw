@@ -144,7 +144,6 @@ def write_graph(filename, lines, student_id, script_name):
         '@prefix cora: <http://purl.org/ieee1872-owl/cora-bare#> .',
         '@prefix soma: <http://www.ease-crc.org/ont/SOMA.owl#> .',
         '@prefix pos:  <http://purl.org/ieee1872-owl/pos#> .',
-        '@prefix dul:  <http://www.ontologydesignpatterns.org/ont/dul/DUL.owl#> .',
         '@prefix qudt: <http://qudt.org/schema/qudt/> .',
         '@prefix unit: <http://qudt.org/vocab/unit/> .',
         '@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .',

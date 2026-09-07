@@ -152,9 +152,9 @@ and each state must link to its joint and numeric position. Given shapes graph
 $S$ and data graph $G$,
 
 $$
-\operatorname{conforms}(S,G)
+\mathrm{conforms}(S,G)
 \Leftrightarrow
-\operatorname{Report}(S,G)=\varnothing.
+\mathrm{Report}(S,G)=\varnothing.
 $$
 
 The numerical conformance conditions are:

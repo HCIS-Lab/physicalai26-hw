@@ -1,0 +1,13 @@
+@prefix hw2: <https://nycu.edu.tw/physical-ai/hw2/ontology#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+
+hw2:FeasibleEdgeShape a sh:NodeShape ;
+    sh:targetClass hw2:Edge ;
+    # TODO F1: obstacle clearance
+
+    # TODO F2: human activity zones
+
+    # TODO F3: personal space
+

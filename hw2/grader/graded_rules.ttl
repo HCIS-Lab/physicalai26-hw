@@ -1,0 +1,29 @@
+# TA ONLY -- not distributed.
+# The feasibility rules a submission is held to.
+
+@prefix hw2: <https://nycu.edu.tw/physical-ai/hw2/ontology#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+
+hw2:GradedEdgeShape a sh:NodeShape ;
+    sh:targetClass hw2:Edge ;
+
+    sh:property [
+        sh:path hw2:entersHumanActivityZone ;
+        sh:qualifiedValueShape [
+            sh:not [
+                sh:property [
+                    sh:path hw2:containsGoal ;
+                    sh:hasValue true ;
+                    sh:minCount 1 ;
+                ]
+            ]
+        ] ;
+        sh:qualifiedMaxCount 0 ;
+        sh:message "Kept edge enters a human activity zone that does not hold the run's goal."@en ;
+    ] ;
+
+    sh:property [
+        sh:path hw2:entersPersonalSpace ;
+        sh:maxCount 0 ;
+        sh:message "Kept edge enters a person's personal space."@en ;
+    ] .

@@ -1,0 +1,46 @@
+@prefix hw2: <https://nycu.edu.tw/physical-ai/hw2/ontology#> .
+@prefix sh:  <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+
+hw2:FeasibleEdgeShape a sh:NodeShape ;
+    sh:targetClass hw2:Edge ;
+    # TODO F1: obstacle clearance
+
+    # TODO F2: human activity zones
+
+    # TODO F3: personal space
+
+# ANSWER START
+    sh:property [
+        sh:path hw2:obstacleClearance ;
+        sh:datatype xsd:double ;
+        sh:minCount 1 ;
+        # Write numeric bounds with the same datatype as obstacleClearance.
+        # A bare Turtle decimal such as 0.25 has datatype xsd:decimal.
+        sh:minInclusive "0.25"^^xsd:double ;
+        sh:message "Obstacle clearance below the 0.25 m this run planned under."@en ;
+    ] ;
+
+    sh:property [
+        sh:path hw2:entersHumanActivityZone ;
+        sh:qualifiedValueShape [
+            sh:not [
+                sh:property [
+                    sh:path hw2:containsGoal ;
+                    sh:hasValue true ;
+                    sh:minCount 1 ;
+                ]
+            ]
+        ] ;
+        sh:qualifiedMaxCount 0 ;
+        sh:message "Edge enters a human activity zone that does not hold the goal."@en ;
+    ] ;
+
+    sh:property [
+        sh:path hw2:entersPersonalSpace ;
+        sh:maxCount 0 ;
+        sh:message "Edge enters a person's personal space."@en ;
+    ] .
+# ANSWER END
+

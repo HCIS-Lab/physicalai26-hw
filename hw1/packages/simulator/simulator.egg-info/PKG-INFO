@@ -1,0 +1,5 @@
+Metadata-Version: 2.4
+Name: simulator
+Version: 0.1.0
+Summary: Config-driven Habitat-Sim engine shared across course homeworks
+Requires-Python: >=3.9

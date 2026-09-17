@@ -2,12 +2,18 @@
 % HW3 — Formal Semantics of the Ontology Vocabulary and the SHACL Layer
 % TA INTERNAL — DO NOT DISTRIBUTE TO STUDENTS.
 % Companion to the TA edition of the assignment handout (main.tex / TA.pdf).
-% Build:  pdflatex ta-formal-semantics.tex   (twice, for cross-references)
+% Build:  xelatex ta-formal-semantics.tex   (twice, for cross-references)
+% Fonts match the assignment handout template (main.tex): DejaVu via fontspec.
 % ============================================================================
 \documentclass[11pt,a4paper]{article}
 
-\usepackage[margin=2.6cm]{geometry}
-\usepackage{amsmath,amssymb,amsthm}
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage{amsmath,amsthm}
+\usepackage{fontspec,unicode-math}
+\setmainfont{DejaVu Serif}
+\setsansfont{DejaVu Sans}
+\setmonofont{DejaVu Sans Mono}
+\setmathfont{DejaVu Math TeX Gyre}
 \usepackage{booktabs}
 \usepackage{array}
 \usepackage{enumitem}
@@ -95,7 +101,7 @@ standard covers.
 
 \subsection{Classes}
 
-\begin{center}\small
+\begin{center}\scriptsize
 \begin{tabular}{@{}llll@{}}
 \toprule
 Class & Origin & Subclass axioms & Intended extension \\
@@ -121,7 +127,7 @@ class expected by the shapes.
 
 \subsection{Object properties $\mathbf{P}_o$}
 
-\begin{center}\small
+\begin{center}\footnotesize
 \begin{tabular}{@{}lll@{}}
 \toprule
 Property & Domain & Range \\
@@ -142,7 +148,7 @@ $\IRI{qudt{:}hasUnit}$ & (any) & $\{\IRI{unit{:}M}, \IRI{unit{:}RAD}\}$ \\
 
 \subsection{Datatype properties $\mathbf{P}_d$}
 
-\begin{center}\footnotesize
+\begin{center}\scriptsize
 \begin{tabular}{@{}llll@{}}
 \toprule
 Property & Domain & Range & Read by \\
@@ -336,10 +342,10 @@ with flag \textsf{FK\_INACCURATE} on each violation.
 \begin{gather*}
   \Phi_{\mathrm{JL}}:\quad
   \forall s\,\forall v\,\forall j\,\forall \ell\,\forall u\
-  \Bigl[\, \IRI{soma{:}JointState}(s) \wedge \IRI{soma{:}hasJointPosition}(s,v)
-  \wedge \IRI{hw3{:}isStateOfJoint}(s,j) \\
-  \wedge\ \IRI{hw3{:}hasJointLowerLimit}(j,\ell) \wedge
-  \IRI{hw3{:}hasJointUpperLimit}(j,u)
+  \Bigl[\, \IRI{soma{:}JointState}(s) \wedge \IRI{soma{:}hasJointPosition}(s,v) \\
+  \wedge\ \IRI{hw3{:}isStateOfJoint}(s,j)
+  \wedge \IRI{hw3{:}hasJointLowerLimit}(j,\ell) \\
+  \wedge\ \IRI{hw3{:}hasJointUpperLimit}(j,u)
   \;\rightarrow\; \ell \le v \le u \,\Bigr] \\
   \text{flag \textsf{JOINT\_LIMIT\_VIOLATION}}.
 \end{gather*}

@@ -1,58 +1,8 @@
-"""Interactive Habitat-Sim data collector for hw1 — thin driver over packages/simulator.
+"""Interactive Habitat-Sim data collector (load.py).
 
-All simulation, pixel-pipeline, replay, and viewer logic lives in the `simulator`
-package (packages/simulator; contract in plan.md). This file only parses the CLI,
-wires the pieces together, and runs the pygame event loop.
-
-HOW TO RUN
-    Interactive collection (pygame window, keyboard-driven):
-        pixi run -e habitat python hw1/load.py
-    Trajectory replay preview (exact .npy pose replay; frames are saved through
-    the same pipeline):
-        pixi run -e habitat python hw1/load.py --trajectory trajectories/secondfloor.npy
-    Config defaults to hw1/configs/second_floor.yaml (--config to override);
-    --output-root overrides output.root; --fps paces the preview loop.
-
-KEYBINDINGS (interactive; the pygame window must have focus)
-    w / s  move forward / backward      c / SPACE  capture frame
-    a / d  turn left / right            q / ESC    quit (aborts replay too)
-
-UNCERTAINTIES ARE SPATIAL and live in both modes: the config's `uncertainties`
-block defines hard-edged circular flicker zones (`center: [x, z]`, `radius`),
-and a frame is degraded iff the AGENT stands inside one — where it is, not when
-it got there. Zone membership is therefore reproducible in interactive mode;
-the flicker phase and the depth noise are not (both key on `t`, which is
-wall-clock while driving and t = frame_index / fps in replay). `--clean` (or
-`uncertainties.enabled: false` in the config) switches the zones off for
-uncorrupted collection.
-
-OUTPUTS (under output.root)
-    rgb/<n>.png  depth/<n>.png  [semantic/<n>.png]  per capture, plus
-    GT_pose.npy: (N, 7) captured poses [x, y, z, qw, qx, qy, qz], plus
-    intrinsics.json: {"width", "height", "hfov"} — the capture's own camera
-    parameters, written by simulator.prepare_capture_dirs. Reconstruction reads
-    them from the capture it is reconstructing, never from a config.
-
-PERFORMANCE (what makes the preview keep 30 fps on a modest machine)
-    Per frame the loop renders the sensors habitat needs, applies the pixel
-    pipeline and repaints the window. The expensive parts are engineered out:
-    the raw readout is cached while the agent stands still (Engine), only the
-    sensors something consumes are attached (semantic only if
-    output.save_semantic, bird's-eye only if display.show_birdseye), lighting
-    is a lookup table, and the viewer repaints only panels whose pixels changed
-    (viewer.Preview). The overlay shows the achieved fps. Knobs if it still
-    stutters: `display.show_birdseye: false` (one fewer 512x512 render per
-    frame), `display.scale: 0.5` (quarter the window pixels — matters most
-    over a remote desktop such as NX/VNC, which re-encodes every changed pixel),
-    `--fps 20`.
-
-GL ORDERING — DO NOT REORDER (condensed; details in simulator.engine / viewer)
-    habitat-sim and pygame both want a GL context on the same X display and
-    crash with `X_GLXMakeCurrent BadAccess` if they share it. Engine hides
-    DISPLAY during Simulator construction (habitat renders offscreen on EGL);
-    simulator.viewer forces SDL software rendering via env vars at ITS import,
-    before pygame. Therefore Engine is constructed FIRST, `simulator.viewer` is
-    imported LAZILY after that, and this file never imports pygame directly.
+    Full module guide migrated to docs/load.md. Thin driver over
+    packages/simulator; see that file for run modes, keybindings,
+    outputs, and GL ordering.
 """
 
 import argparse

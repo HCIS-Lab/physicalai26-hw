@@ -1,53 +1,8 @@
-"""
-Coverage-aware reconstruction score for HW1 — accuracy / completeness / F-score.
+"""Coverage-aware reconstruction score (completeness.py).
 
-WHY (beyond mean L2)
-    Trajectory error alone rewards doing less: a student who captures 5 frames of
-    one corner can post a tiny error, while one who covers the whole apartment in
-    ~380 frames scores worse. Correctness must couple *accuracy* with *coverage*.
-    This module compares the reconstructed cloud against a whole-floor GT map:
-
-        accuracy(tau)     = frac of PRED points within tau of the GT map
-        completeness(tau) = frac of GT-map points within tau of PRED
-        F(tau)            = 2 * A * C / (A + C)
-
-    accuracy alone is gameable by a well-placed sliver; completeness collapses for
-    a sliver (most of the floor is uncovered); F folds both into one number.
-
-FRAME MISMATCH — handled by ONE known transform (no fitting)
-    The reconstruction R is expressed relative to the first camera. Habitat gives
-    the world pose of that first camera, so a single anchor matrix lifts every
-    reconstructed point into the world frame:
-
-        T_anchor = Twc0 @ F
-          Twc0 = [ R(quat0) | t0 ]     world  <- habitat camera 0   (from GT_pose[0])
-          F    = diag(1, -1, -1)       habitat camera <- optical frame
-
-    No Umeyama, no ICP, no RANSAC — nothing to overfit or diverge. The residual
-    pred->GT distance therefore stays equal to the real reconstruction drift
-    (an alignment fit would hide that drift; anchoring keeps the score honest).
-
-GT REFERENCE
-    The whole-floor map is built from the *baseline* (clean, scheduler-off)
-    capture of evaluate.py's two-run flow — eval/_data/second_floor/baseline/ —
-    NEVER from the uncertainty-corrupted mixed/ capture (build_gt_reference
-    rejects a mixed/ dir outright). Every frame is unprojected and placed with
-    its GROUND-TRUTH pose (same anchor math, per frame). It is fixed and
-    independent of what a student collected, so a 5-frame submission is scored
-    against the entire apartment.
-
-THIS MODULE IS THE GRADER — IT IMPORTS NOTHING FROM utils.py
-    utils.py is student-editable, so anything the grader takes from it is a
-    channel through which a submission can move its own score. Two ways that
-    bites, and the second is the serious one:
-      * utils.py's unprojection ships blank (`#TODO`) — an unfinished utils.py
-        would make the grader itself uncallable;
-      * build_gt_reference builds the REFERENCE the score is measured against,
-        so a creative or simply buggy student unprojection would corrupt the
-        yardstick rather than the thing being measured.
-    Hence the frozen private helpers below (_read_intrinsics, _sorted_frames,
-    _load_depth_meters, _unproject). They deliberately duplicate a little of
-    utils.py; see the comment on _unproject before "cleaning that up".
+    Full module guide migrated to docs/completeness.md — accuracy /
+    completeness / F-score, anchor transform, GT reference, and the
+    grader-isolation rule.
 """
 
 import os

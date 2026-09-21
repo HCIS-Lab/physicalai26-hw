@@ -1,146 +1,7 @@
-"""
-Thin CLI over hw1/utils.py: reconstruct ONE captured run (a dir holding
-rgb/ depth/ GT_pose.npy) with geometry-only ICP SLAM, print trajectory mean L2 vs
-ground truth, write the number back into the experiment that describes it, and
-open an Open3D window with the reconstructed cloud + estimated (red) and GT
-(black) trajectories.
+"""Thin CLI over utils.py (reconstruct.py).
 
-The heavy lifting lives in utils.py so the evaluator can run headless. This file
-is the interactive/visual entry point and the run orchestrator, nothing else.
-
-    pixi run -e habitat python hw1/reconstruct.py --data_root eval/_data/first_floor/baseline/
-    pixi run -e habitat python hw1/reconstruct.py --data_root eval/_data/first_floor/mixed/ --version open3d
-    pixi run -e habitat python hw1/reconstruct.py \
-        --data_root eval/_data/first_floor/baseline \
-        --experiment hw1/experiments/strict_clip.ttl --no-vis
-
-EXPERIMENT IN, TWO RUNS OUT  (`--experiment <path.ttl>`)
-    One experiment Turtle is BOTH the selection input and the result sink, so a
-    run is self-describing: which frames, under which settings, produced which
-    error. Everything RDF-shaped is delegated to hw1/api.py — `read_experiment`
-    on the way in, `write_run` on the way out (§8.2). This file
-    never parses Turtle and never re-derives the IRI scheme; the frame-IRI tail
-    parse has exactly one implementation, `api.frame_index_from_iri`, and
-    `read_experiment` calls it for us.
-
-    THE FILE IS STUDENT-AUTHORED ABOVE THE MARKER (§3.1). An
-    experiment file is a student's declaration — batch, factor selection,
-    thresholds — plus a machine section written once by `api.py experiment`.
-    Runs are the experiment's OUTCOME, not its design, so `write_run` is the one
-    mutation an assessed file accepts: it rewrites only below the marker and
-    verifies the `hw1:declarationDigest` seal first, which is why this program
-    refuses a file whose declaration was edited after assessment.
-
-    Without `--experiment` this stays the plain visual entry point: whole batch,
-    no selection, no write-back. (§7 lists `--experiment` in the
-    command surface; it is kept OPTIONAL here so a fresh capture with no
-    measurement pass yet is still reconstructable and viewable. `--selected-only`
-    without an experiment is a hard error — there is nothing to select from.)
-
-BASELINE AND SELECTED ARE TWO RUN NODES IN ONE EXPERIMENT
-    This is the v2 change to read first. In v1 a selected run was a DERIVED
-    EXPERIMENT with its own id and its own `hw1:includesFrame` list, and the two
-    files had to be kept apart by a digest suffix. Both are deleted
-    (§6/§11). Now:
-
-        <exp> hw1:hasRun <exp>/run/baseline  (hw1:selectionMode hw1:FullBatch)
-        <exp> hw1:hasRun <exp>/run/selected  (hw1:selectionMode hw1:GoodSegments)
-
-    Two IRIs inside one experiment, so baseline and selected CANNOT overwrite
-    each other by construction — which was the failure mode the derived-id
-    machinery existed to prevent. BOTH RUNS EXECUTE BY DEFAULT, because the
-    comparison between them is the deliverable and a default that produced only
-    half of it invited reporting the wrong half. `--baseline-only` /
-    `--selected-only` restrict; `--no-write` prints and touches no file.
-
-    V3.2 INTERPRETATION: selected is a falsification probe, not a repair promise.
-    It tests whether failed inputs are load-bearing while recording the splice,
-    gap and gate mechanism by which deletion itself can be harmful. The
-    full-batch baseline is the convergence outcome. Continuous values are the
-    effect size; Pass/Fail is only the declared policy line.
-
-SELECTION IS STATUS-DRIVEN, AND THE STATUSES ARE ALREADY IN THE FILE
-    `api.py experiment` baked a `hw1:Pass`/`hw1:Fail` next to every observable
-    when it measured it (§4.3), against the QualificationSettings
-    recorded on the same experiment. So selection here is not a measurement and
-    not a query: `read_experiment` hands over `usable_links` — every pair whose
-    `hw1:qualificationStatus` is Pass (vacuously so when no pair factor was
-    selected) AND whose two endpoint frames are usable, i.e. every annotation of
-    theirs passed (vacuously so for a modality with no selected factor), §4.5 —
-    and `api.cut_contiguous_segments(usable_links)` chains those links into
-    maximal contiguous segments. EVERY maximal chain is kept, whatever its
-    length: the `minSegmentLength` floor was deleted from the vocabulary on
-    2026-07-31 because it encoded a property of the ICP backend, not of the data
-    (api.cut_contiguous_segments).
-
-    IF THERE IS NO USABLE LINK AT ALL, NO SELECTED RUN IS WRITTEN and the reason
-    is printed (§7). Writing an `INF` run for "there was nothing to
-    reconstruct" would put a measurement failure and a selection outcome in the
-    same triple, and the attribution query cannot tell them apart.
-
-    SUBSETTING — why segments and not a frame filter. Dropping interior frames
-    widens the motion between the frames that remain, while the constant-velocity
-    prior and the per-step gate in utils.reconstruct are sized for CONSECUTIVE
-    frames. A sparse selection therefore scores worse for reasons that have
-    nothing to do with the quality of the frames it kept — see utils.reconstruct's
-    SUBSETTING note. That is exactly why the cut is contiguous: inside a segment
-    every surviving pair is still consecutive, so the gate keeps the size it was
-    designed for. The selected frame list handed to utils.reconstruct is the
-    concatenation of the segments, so ONE spliced pair appears per segment
-    boundary — a handful of splices instead of one per rejected frame, which is
-    the whole point of cutting rather than filtering.
-
-`--data_root` STAYS AN EXPLICIT ARGUMENT
-    The experiment's `hw1:batchFile` names the capture directory, but this
-    program keeps `--data_root` explicit: a capture must stay reconstructable
-    from its own directory, which is utils.reconstruct's existing contract. The
-    only thing standing between "scored capture A, wrote the number into
-    capture B's experiment" and silent, unrecoverable nonsense is the guard
-    below: if the experiment's `hw1:onBatch` name and the `--data_root`
-    basename disagree, a loud warning naming both is printed. The batch name
-    is floor-qualified (`floor1_baseline`) and the directory is not
-    (`baseline`), so the comparison strips the `floor<N>_` prefix first.
-
-`--version` / THE `icpBackend` SETTING
-    `icpBackend` is an ordinary string-valued Parameter (§5, values
-    `open3d` | `my_icp`), recorded on every experiment because it is one of the
-    three run-factor parameters the completeness rule always requires (§4.2). So:
-      * caller passes no `--version` and the experiment records the setting -> the
-        backend comes FROM THE EXPERIMENT;
-      * caller passes `--version` and it disagrees with the recorded setting ->
-        hard error, not a silent override, because the file would otherwise
-        assert a setting value that is not what produced the number;
-      * neither -> `open3d`, the declared default.
-
-WRITE-BACK
-    `api.write_run(<experiment>, mode, {"mapMeanL2": l2}, …)` — the ONE writer of
-    `hw1:ReconstructionRun` triples (§8.2). It rewrites the machine
-    section in place (rdflib parse -> mutate -> serialize below the marker),
-    which drops comments and reorders prefixes THERE; acceptable because that
-    half of the file is machine generated, and the student's declaration above
-    the marker is preserved byte for byte. It is idempotent PER KEY, so a later
-    `completeness.py` adding `coverageF` to the same run does not erase
-    `mapMeanL2`, and re-running this program replaces its own number instead of
-    accumulating a second one. `write_run` also computes `hw1:mapMeanL2Status`
-    from the experiment's own `maxMapMeanL2` threshold, so this file never
-    compares a value to a threshold.
-
-    THE NAME `mapMeanL2` IS LEGACY. `utils.mean_l2` compares predicted and GT
-    camera centres, so it is a TRAJECTORY metric. `--reference-root` adds
-    `coverageF`, the complementary point-cloud map metric. Every run also stores
-    `gatedSteps`; selected stores `spliceCount` and `maxGapLength`.
-
-    `mean_l2` returns `inf` when GT is missing and that `inf` is written as-is:
-    `"INF"^^xsd:double` fails the finite threshold, so a scoreless run grades
-    FAILED rather than excellent — the same fail-closed convention every
-    measurer in `api.py` uses. `--no-write` prints the numbers and touches
-    nothing.
-
-    SELECTION PROVENANCE IS IN THE FILE. The selected run asserts one
-    `hw1:usedFrame` per frame it consumed plus `hw1:runFrameCount`, so "which
-    frames produced this number" is answerable from the experiment alone —
-    `api.py explore <experiment>.ttl` prints it. There is no CSV sidecar to keep
-    in sync, and none is needed.
+    Full module guide migrated to docs/reconstruct.md — baseline +
+    selected runs, status-driven selection, write-back, and CLI flags.
 """
 import os
 import re
@@ -148,6 +9,7 @@ import sys
 import time
 import argparse
 import json
+import inspect
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -195,6 +57,137 @@ def _plan_selected(exp):
     print(f"[reconstruct] selection: {len(segments)} segment(s), {len(frames)} frames "
           f"[{spans}]")
     return frames, segments
+
+
+def _segments_from_frames(frames):
+    """Sorted frame indices -> maximal contiguous segments, including singletons."""
+    segments = []
+    for frame in sorted(set(int(value) for value in frames)):
+        if segments and frame == segments[-1][-1] + 1:
+            segments[-1].append(frame)
+        else:
+            segments.append([frame])
+    return segments
+
+
+def _plan_query_selected(exp, query_path):
+    """Select frames from a student's local SPARQL SELECT query.
+
+    The query must bind ``?frame`` (a HW1 frame IRI) or ``?frameIndex`` (an
+    integer). Results are constrained to frames known to this experiment, then
+    cut into contiguous segments so a personal assessment cannot silently create
+    unmeasured temporal jumps.
+    """
+    try:
+        with open(query_path, "r", encoding="utf-8") as handle:
+            query_text = handle.read()
+            result = _run_selection_query(exp, query_text)
+    except OSError as exc:
+        raise ValueError(f"cannot read --selection-query {query_path!r}: {exc}") from None
+    if result.type != "SELECT":
+        raise ValueError("--selection-query must be a SPARQL SELECT query that binds "
+                         "?frame or ?frameIndex")
+
+    names = {str(var): var for var in result.vars}
+    frame_var = names.get("frame")
+    index_var = names.get("frameIndex")
+    if frame_var is None and index_var is None:
+        raise ValueError("--selection-query must bind ?frame (a frame IRI) or "
+                         "?frameIndex (an integer)")
+
+    selected = set()
+    known_iris = _experiment_frame_iris(exp)
+    for row in result:
+        from_frame = None if frame_var is None else row[frame_var]
+        from_index = None if index_var is None else row[index_var]
+        if from_frame is None and from_index is None:
+            continue
+        try:
+            if from_frame is not None:
+                # Never accept a foreign frame merely because its IRI has the
+                # same numeric tail as a frame in this experiment.
+                if str(from_frame) not in known_iris:
+                    raise ValueError("frame is not a member of the selected experiment")
+                frame = _frame_index_for_iri(exp, from_frame)
+            else:
+                frame = int(from_index)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("--selection-query returned an invalid ?frame or "
+                             f"?frameIndex: {from_frame!r}, {from_index!r}") from exc
+        if from_frame is not None and from_index is not None:
+            try:
+                if frame != int(from_index):
+                    raise ValueError("--selection-query returned disagreeing ?frame and "
+                                     f"?frameIndex values: {from_frame!r}, {from_index!r}")
+            except (TypeError, ValueError) as exc:
+                raise ValueError("--selection-query returned a non-integer ?frameIndex: "
+                                 f"{from_index!r}") from exc
+        selected.add(frame)
+
+    known = set(exp["frame_status"])
+    unknown = sorted(selected - known)
+    if unknown:
+        raise ValueError("--selection-query selected frame index/indices not present in "
+                         f"this experiment: {', '.join(map(str, unknown))}")
+    segments = _segments_from_frames(selected)
+    if not segments:
+        print("[reconstruct] personal SPARQL selection is EMPTY; no selected run written.")
+        return None, []
+    frames = [frame for segment in segments for frame in segment]
+    spans = ", ".join(f"{segment[0]}..{segment[-1]}({len(segment)})"
+                      for segment in segments[:8])
+    if len(segments) > 8:
+        spans += f", … +{len(segments) - 8} more"
+    print(f"[reconstruct] personal SPARQL selection: {len(segments)} segment(s), "
+          f"{len(frames)} frames [{spans}]")
+    return frames, segments
+
+
+def _experiment_frame_iris(exp):
+    """Return exact frame IRIs and indices from the assessed experiment graph."""
+    graph = exp["graph"]
+    hw1 = api.HW1
+    batch = graph.value(exp["exp_iri"], hw1.onBatch)
+    out = {}
+    if batch is None:
+        return out
+    for frame in graph.objects(batch, hw1.hasFrame):
+        index = graph.value(frame, hw1.frameIndex)
+        if index is not None:
+            out[str(frame)] = int(index)
+    return out
+
+
+def _frame_index_for_iri(exp, frame):
+    known = _experiment_frame_iris(exp)
+    try:
+        return known[str(frame)]
+    except KeyError:
+        raise ValueError(f"frame {frame!s} is not a member of the experiment batch") from None
+
+
+def _run_selection_query(exp, query_text):
+    """Run a policy with an exact experiment binding when supported by api."""
+    graph = exp["graph"]
+    experiment = exp.get("exp_iri")
+    query_fn = api.query_graph
+    try:
+        params = inspect.signature(query_fn).parameters
+        if experiment is not None and "bindings" in params:
+            return query_fn(graph, query_text, bindings={"experiment": experiment})
+        if experiment is not None and "init_bindings" in params:
+            return query_fn(graph, query_text,
+                            init_bindings={"experiment": experiment})
+    except (TypeError, ValueError):
+        pass
+    # Compatibility with the pre-refactor adapter.  The query templates still
+    # contain ?experiment; constrain it without changing student query text.
+    if experiment is not None:
+        try:
+            return graph.query(query_text, initBindings={"experiment": experiment})
+        except Exception as exc:
+            raise ValueError(f"invalid or unsupported SPARQL query: {exc}") from None
+    return query_fn(graph, query_text)
 
 
 def _score(data_root, version, frames, build_cloud, mode, map_voxel=None,
@@ -298,6 +291,11 @@ def main():
                              'frame selection in via the baked Pass/Fail statuses, run '
                              'values out, written below the machine marker. Omit for a '
                              'plain whole-batch visual run.')
+    parser.add_argument('--selection-query', metavar='QUERY.rq', default=None,
+                        help='student-authored local SPARQL SELECT query over --experiment. '
+                             'It must bind ?frame (frame IRI) or ?frameIndex (integer). '
+                             'Overrides the default baked-status selection for the selected run; '
+                             'results are cut into contiguous segments.')
     parser.add_argument('--no-write', action='store_true',
                         help='dry run: print the results but write nothing into the '
                              'experiment file')
@@ -330,7 +328,10 @@ def main():
     if args.experiment is None and args.selected_only:
         parser.error("--selected-only needs --experiment: the selection comes from the "
                      "Pass/Fail statuses baked into an experiment file "
-                     "(§4.5), and there is nothing to cut segments from without one.")
+                    "(§4.5), and there is nothing to cut segments from without one.")
+    if args.experiment is None and args.selection_query is not None:
+        parser.error("--selection-query requires --experiment: it queries that experiment's "
+                     "local RDF graph.")
 
     mask_factor = None
     if args.mask_dir is not None:
@@ -390,8 +391,16 @@ def main():
     plan = []
     if not args.selected_only:
         plan.append(("baseline", None, [], None, None))
-    if exp is not None and not args.baseline_only:
-        frames, segments = _plan_selected(exp)
+    # If PriorWarpDepthResidual is deferred, selection must be planned only
+    # after the baseline writes its evidence and the experiment is reloaded.
+    # Appending to this list from the baseline iteration keeps the execution
+    # order (baseline, then selected) while avoiding stale RDF state.
+    selection_deferred = (exp is not None and not args.baseline_only and
+                          "PriorWarpDepthResidual" in exp["selected"] and
+                          not args.selected_only)
+    if exp is not None and not args.baseline_only and not selection_deferred:
+        frames, segments = (_plan_query_selected(exp, args.selection_query)
+                            if args.selection_query is not None else _plan_selected(exp))
         if frames is not None:
             plan.append(("selected", frames, segments, None, None))
     if args.mask_dir is not None:
@@ -444,6 +453,15 @@ def main():
             api.write_pair_measurements(
                 args.experiment, "PriorWarpDepthResidual",
                 diagnostics.get("prior_warp_measurements", []))
+            # write_pair_measurements mutates the Turtle; reload through the
+            # canonical reader so qualification sees the persisted graph and
+            # completion state, not the pre-baseline in-memory snapshot.
+            exp = api.read_experiment(args.experiment)
+            if selection_deferred:
+                frames, segments = (_plan_query_selected(exp, args.selection_query)
+                                    if args.selection_query is not None else _plan_selected(exp))
+                if frames is not None:
+                    plan.append(("selected", frames, segments, None, None))
 
         diagnostic_file = _write_link_diagnostics(
             args.experiment, mode, diagnostics)

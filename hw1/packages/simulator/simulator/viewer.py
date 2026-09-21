@@ -1,9 +1,11 @@
 """pygame preview panels. The ONLY module in the package that imports pygame.
 
-SDL must be forced to a pure-software X11 window BEFORE `import pygame`, or
-pygame's GLX context collides with habitat's GL and crashes with
-`X Error ... X_GLXMakeCurrent BadAccess` (see hw1 root_cause_analysis). Callers
-must also construct Engine BEFORE initializing the viewer window, and must never
+On Linux, SDL must be forced to a pure-software X11 window BEFORE
+`import pygame`, or pygame's GLX context collides with habitat's GL and
+crashes with `X Error ... X_GLXMakeCurrent BadAccess` (see hw1
+root_cause_analysis). On macOS there is no X11, so the SDL overrides are
+skipped and pygame uses its default Cocoa driver. Callers must also
+construct Engine BEFORE initializing the viewer window, and must never
 import pygame directly — always through this module.
 
 PERFORMANCE: `Preview` is the incremental painter hw1/load.py drives. It keeps a
@@ -17,10 +19,19 @@ stateless full-repaint variant with the original signature.
 """
 
 import os
+import sys
 
-os.environ.setdefault("SDL_VIDEODRIVER", "x11")
-os.environ.setdefault("SDL_RENDER_DRIVER", "software")
-os.environ.setdefault("SDL_FRAMEBUFFER_ACCELERATION", "0")
+# Linux/X11 only: force a pure-software X11 window BEFORE `import pygame`, or
+# pygame's GLX context collides with habitat's GL and crashes with
+# `X Error ... X_GLXMakeCurrent BadAccess` (see hw1 root_cause_analysis).
+# On macOS there is no X11 — SDL must use its default Cocoa video driver, so
+# SDL_VIDEODRIVER must NOT be set (setting it to "x11" makes pygame.init()
+# fail with "x11 not available"). SDL_RENDER_DRIVER=software is harmless on
+# both, but only force it on Linux to leave macOS defaults alone.
+if sys.platform.startswith("linux"):
+    os.environ.setdefault("SDL_VIDEODRIVER", "x11")
+    os.environ.setdefault("SDL_RENDER_DRIVER", "software")
+    os.environ.setdefault("SDL_FRAMEBUFFER_ACCELERATION", "0")
 
 import pygame  # noqa: E402  (env vars above must precede this import)
 

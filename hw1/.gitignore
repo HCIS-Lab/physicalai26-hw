@@ -1,5 +1,37 @@
+# --- project data / envs ---
+outputs
+run/
+.pixi/
+data_collection/
+data/
+replica_v1/
+*.ttl
+*.json
+*.npy
 
+
+# --- python ---
 __pycache__/
-*.pyc
-hw1/experiments/**/masks/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.Python
+
+# --- tooling caches ---
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+
+# --- editor / os ---
+.vscode/
+.idea/
+*.swp
 .DS_Store
+hw1/experiments/**/masks/

@@ -108,7 +108,6 @@ def test_exported_drop_mask_changes_point_count(tmp_path):
 def test_deferred_prior_warp_round_trip_and_masked_run_provenance(tmp_path):
     capture = tmp_path / "capture"
     _write_capture(capture)
-    api.main(["batch2ttl", "--data-dir", str(capture), "--floor", "1"])
 
     experiment = tmp_path / "prior_test.ttl"
     experiment.write_text(
@@ -116,7 +115,7 @@ def test_deferred_prior_warp_round_trip_and_masked_run_provenance(tmp_path):
         "@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\n"
         "<http://taica.course/hw1/ontology#experiment/prior_test>\n"
         "    a hw1:Experiment ;\n"
-        f"    hw1:batchFile \"{capture / 'batch.ttl'}\" ;\n"
+        f"    hw1:batchFile \"{capture}\" ;\n"
         "    hw1:onBatch <http://taica.course/hw1/ontology#batch/floor1_capture> ;\n"
         "    hw1:evaluatesFactor hw1:PriorWarpDepthResidual .\n",
         encoding="utf-8")

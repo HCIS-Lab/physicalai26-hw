@@ -1,40 +1,8 @@
-"""
-Geometry-only ICP SLAM utilities for the HW1 robustness/generalization eval.
+"""Geometry-only ICP SLAM utilities (utils.py).
 
-Split out of the original reconstruction script so the reconstruction pipeline
-can be driven headless (no Open3D window) from the evaluator, while the thin
-hw1/reconstruct.py CLI still imports these for interactive visualisation.
-
-GEOMETRY ONLY, BY DESIGN
-    NO colour is used in registration, anywhere. Lighting perturbation therefore
-    reaches the geometry ONLY through the depth sensor's ambient-light coupling
-    (see load.apply_depth_sensor): brighter/darker exposure raises depth noise /
-    dropout / range loss, which moves the reconstruction metric.
-
-    Keep it that way. RGB is a declared *proxy* in this assignment, not a cause —
-    if colour leaked into registration, the causal chain being measured would stop
-    being the one being claimed, and every conclusion drawn downstream would be
-    unsupported.
-
-DEPTH FORMAT
-    load_depth_meters auto-detects the on-disk depth encoding:
-      * uint16 PNG  -> millimetres      (value / 1000 = metres)   [eval path]
-      * uint8  PNG  -> Habitat 8-bit vis (value / 255 * 10 = metres)
-    The eval collector (load.save_frame) writes 16-bit mm so the injected
-    coupling noise survives to the reconstructor instead of being swamped by
-    8-bit quantisation.
-
-KEY EXPORTS
-    load_depth_meters, depth_image_to_point_cloud, preprocess_point_cloud,
-    global_registration, local_icp_algorithm, my_local_icp_algorithm,
-    remove_ceiling, make_trajectory,
-    reconstruct(data_root, version="open3d") -> (pcd, pred_cam_pos, gt_poses),
-    reconstruct(..., return_diagnostics=True)
-        -> (pcd, pred_cam_pos, gt_poses, diagnostics),
-    mean_l2(pred_cam_pos, gt_poses) -> float,
-    pred_positions_frame0 / gt_positions_frame0 — the frame reconciliation
-        mean_l2 scores in, exposed so the visualiser can draw the same frame
-        instead of reimplementing it
+    Full module guide migrated to docs/utils.md. See utils.reconstruct
+    docstring for the pipeline contract; this file stays the headless
+    implementation imported by reconstruct.py.
 """
 
 import json

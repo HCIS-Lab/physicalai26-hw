@@ -1,6 +1,7 @@
 """Engine: owns the habitat_sim.Simulator, agent, scheduler, time base, RNG, and
-the GL workaround (hide DISPLAY during Simulator construction so habitat renders
-offscreen on EGL; restore in a finally; tolerate DISPLAY unset for pure headless).
+the GL workaround (on Linux, hide DISPLAY during Simulator construction so
+habitat renders offscreen on EGL; restore in a finally; tolerate DISPLAY
+unset for pure headless; on macOS the workaround is a no-op).
 
 Contract highlights (plan.md):
 - Engine exposes PUBLIC `.sim` and `.agent` (search_traj needs pathfinder, the raw
@@ -22,6 +23,7 @@ PERFORMANCE
 """
 
 import os
+import sys
 
 import numpy as np
 
@@ -162,13 +164,16 @@ def add_start_marker(sim, config):
 class Engine:
     """Config-driven simulator session: Simulator + agent + scheduler + RNG.
 
-    CRITICAL GOTCHA — DO NOT REMOVE THE GL WORKAROUND
-        habitat-sim and pygame both want an OpenGL context on the same X
-        display, which crashes fatally with `X Error ... X_GLXMakeCurrent
-        BadAccess`. DISPLAY is hidden while `habitat_sim.Simulator(...)` is
-        constructed so habitat renders offscreen on EGL instead of GLX, then
-        restored (in a finally) so a viewer can own the on-screen window.
-        DISPLAY may legitimately be unset (pure headless) — tolerated.
+    CRITICAL GOTCHA — DO NOT REMOVE THE GL WORKAROUND (Linux/X11 only)
+        On Linux, habitat-sim and pygame both want an OpenGL context on the
+        same X display, which crashes fatally with `X Error ...
+        X_GLXMakeCurrent BadAccess`. DISPLAY is hidden while
+        `habitat_sim.Simulator(...)` is constructed so habitat renders
+        offscreen on EGL instead of GLX, then restored (in a finally) so a
+        viewer can own the on-screen window. DISPLAY may legitimately be
+        unset (pure headless) — tolerated.
+        On macOS there is no X display / EGL path: DISPLAY is normally unset
+        and must simply be left alone (no hide/restore needed).
         The complementary fix — SDL software rendering — lives at the top of
         simulator.viewer; callers must construct Engine BEFORE the viewer.
 
@@ -192,12 +197,16 @@ class Engine:
         self._obs = None          # last raw readout
         self._obs_pose = None     # agent pose it was rendered at
 
-        # GL workaround: hide DISPLAY so habitat constructs on offscreen EGL.
-        saved_display = os.environ.pop("DISPLAY", None)
+        # GL workaround (Linux/X11 only): hide DISPLAY so habitat constructs
+        # on offscreen EGL. On macOS there is no X display — leave the
+        # environment untouched.
+        saved_display = os.environ.pop("DISPLAY", None) \
+            if sys.platform.startswith("linux") else None
+        hide_display = sys.platform.startswith("linux")
         try:
             self.sim = habitat_sim.Simulator(make_cfg(config))
         finally:
-            if saved_display is not None:
+            if hide_display and saved_display is not None:
                 os.environ["DISPLAY"] = saved_display
 
         self.agent = self.sim.initialize_agent(0)

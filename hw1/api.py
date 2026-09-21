@@ -6,8 +6,8 @@ verdict of every number next to the number, in the student's own file.
 WHAT THIS FILE IS
     A four-subcommand command-line tool that bridges a directory of captured
     SLAM frames to local RDF Turtle files, using `rdflib` and nothing else for
-    the RDF. No server, no daemon, and — since §10 — no SPARQL:
-    every artefact is a self-contained .ttl file on disk.
+    the RDF. There is no server or daemon: every artefact is a self-contained
+    .ttl file on disk, and local SPARQL queries run directly against it.
 
     * `declare`    — scaffold a declaration Turtle under `hw1/experiments/`:
                      prefixes, the Experiment node whose IRI tail equals the file
@@ -32,6 +32,8 @@ WHAT THIS FILE IS
                      runs and the computed VERDICT section) or several
                      experiments side by side. Writes nothing, measures nothing
                      (§7.1).
+    * `query`      — run a student-supplied read-only SPARQL query against one
+                     local Turtle file. It never needs a triplestore.
     * `batch2ttl`  — DEPRECATED as a required step. `declare` / `experiment` /
                      `explore` face the capture directory directly. This command
                      remains only to write optional generation provenance
@@ -42,10 +44,8 @@ WHAT THIS FILE IS
     hw1:ReconstructionRun nodes below the marker of an experiment file through
     `write_run`.
 
-    v2's `query` command, the `queries/*.rq` files and the pyoxigraph dependency
-    are DELETED (§10). With statuses, settings, roles and runs baked
-    into one self-contained file every shipped query degenerated into a
-    projection over that file, and projections are `explore`'s job.
+    `explore` is the guided projection of the experiment. `query` complements it
+    when students want to ask and inspect their own SPARQL questions.
 
 SIX DEPTH FACTORS + TWO RGB FACTORS + ONE BASELINE
     Depth frame: HighFrequencyDepthResidual, FlyingPixelRatio,
@@ -185,7 +185,7 @@ SEE ALSO
     ontology/hw1.ttl            — the TBox these triples must satisfy
     definitions.md              — the measurement contracts and their sources
 
-STUDENT IMPLEMENTATION SURFACE (instruction.md §5.2)
+STUDENT IMPLEMENTATION SURFACE (README.md §5.2)
     Students implement ONLY the eight qualification-factor measurers behind the
     factor menu — never the RDF machinery:
 
@@ -207,8 +207,10 @@ STUDENT IMPLEMENTATION SURFACE (instruction.md §5.2)
 """
 
 import argparse
+import csv
 import glob
 import hashlib
+import json
 import os
 import re
 import sys
@@ -233,6 +235,9 @@ from rdflib import Graph, Literal, Namespace, RDF, RDFS, URIRef, XSD
 #   properties and a run outcome is an ordinary observable.
 # =============================================================================
 NS = "http://taica.course/hw1/ontology#"
+# Instance data uses a separate namespace from the ontology vocabulary. This
+# keeps v5 Turtle qnames legal and readable; legacy v4 IRIs remain under NS.
+DATA_NS = "http://taica.course/hw1/data/"
 HW1 = Namespace(NS)
 SCHEMA = Namespace("https://schema.org/")
 QUDT = Namespace("http://qudt.org/schema/qudt/")
@@ -283,121 +288,24 @@ _MAD_TO_SIGMA = 0.6745
 #   observable reproducible from the file it was measured from.
 # =============================================================================
 def _value_channel(rgb_path):
-    """V = max(R,G,B) per pixel, float64 HxW in [0,255].  HSV Value, no weighting.
-
-    The single definition of the value channel for this assignment; both clip
-    factors and the baseline are built on it.
-    """
+    """V = max(R,G,B) per pixel, float64 HxW in [0,255]. Full contract: docs/factors.md."""
     arr = np.asarray(Image.open(rgb_path).convert("RGB"), dtype=np.float64)
     return arr.max(axis=2)
 
 
 def frame_mean_value(rgb_path):
-    """The BASELINE, deliberately weak: mean of V = max(R,G,B) over one RGB frame.
-
-    Returns a float in [0, 255].  Deterministic and pure (numpy + Pillow only).
-
-    THIS IS NOT A QUALITY FACTOR AND HAS NO BAND.  It ships implemented for two
-    reasons: it shows the shape every measurer in this file has (path in, one
-    documented scalar out), and it is the baseline your two clip factors must
-    OUTPERFORM.  It is a poor exposure metric on its own terms:
-
-      * a first moment cannot represent two failure modes — under- and
-        over-exposure — with one interval, so any threshold around it widens
-        until it admits both;
-      * it is confounded with scene content: pointing the camera at a bright
-        window moves it as much as the effect you are trying to measure does;
-      * it is blind to distribution shape.  A frame that is half crushed and half
-        blown out has a perfectly ordinary mean of 127.5 while not one pixel in it
-        is recoverable — see the half-black/half-white fixture in test_e2e.py;
-      * the same trap is documented for sum-based gradient metrics (Zhang,
-        Forster and Scaramuzza, ICRA 2017): they select over-exposed images, while
-        percentile-based metrics won on 13 of 18 datasets.  Mean and sum
-        statistics fail this way; tail and order statistics do not.
-
-    That is the transferable lesson, and beating this baseline is how you meet it.
-    """
+    """BASELINE (not a factor): mean of V over one RGB frame, [0,255]. Deliberately weak. Full contract: docs/factors.md."""
     return float(_value_channel(rgb_path).mean())
 
 
 def frame_clip_hi_fraction(rgb_path, tau_hi):
-    """RGB quality factor 1 (HighlightClipping) — blown-out pixel fraction.
-
-    CONTRACT
-        In:     rgb_path — an RGB PNG.
-                tau_hi — the highlight threshold on the 0-255 value scale.  It has
-                NO DEFAULT and must never be hardcoded: it is a MEASUREMENT
-                parameter you derive and justify, and a fraction measured at one
-                tau is simply not the same quantity as a fraction measured at
-                another.  That is why tau_hi is recorded on the Batch node.
-        Out:    one float in [0, 1]:
-
-                    clip_hi_fraction = |{ V >= tau_hi }| / N ,   V = max(R,G,B)
-
-        Grade:  LowerIsBetter, one-sided: Pass iff <= maxClipHiFraction.
-        Purity: deterministic; no randomness, no global state.
-
-    THE TWO CLIP FACTORS USE THE SAME OPERATOR AND MEAN DIFFERENT QUANTIFIERS
-    This is correct, deliberate, and the most likely thing for someone to "fix":
-
-        V >= tau_hi   <=>   AT LEAST ONE channel is saturated      (exists)
-        V <= tau_lo   <=>   EVERY channel is crushed               (for all)
-
-    Both are right, because clipping is a per-channel phenomenon: one railed
-    channel has already destroyed the pixel's colour, while a pixel is only truly
-    black when nothing is left in any channel.
-
-    SOURCE
-        Shin, Kim, Kim, Lee and Kim, "Camera Exposure Control for Robust Robot
-        Vision with Noise-Aware Image Quality Assessment", IROS 2019 — the
-        unsaturated-region mask of their eq. 7, U(i) = 1 iff tau_l <= I(i) <= tau_h,
-        which masks out exactly the pixels whose values carry no recoverable
-        information.  Split into two observables rather than one union because the
-        gate does not need the direction but the DIAGNOSIS does: a single number
-        cannot tell a crushed frame from a blown-out one.
-
-    STUDENT IMPLEMENTATION (instruction.md §5.2): implemented BY STUDENTS.
-        The reference body below ships only so the pipeline can be tested end
-        to end; the handout strips it to a `#TODO` stub, and this docstring's
-        CONTRACT is the assignment.
-    """
+    """HighlightClipping: |{V >= tau_hi}| / N, LowerIsBetter, Pass iff <= maxClipHiFraction. tau_hi has no default. Full contract: docs/factors.md."""
     V = _value_channel(rgb_path)
     return float(np.count_nonzero(V >= tau_hi)) / float(V.size)
 
 
 def frame_clip_lo_fraction(rgb_path, tau_lo):
-    """RGB quality factor 2 (ShadowClipping) — crushed pixel fraction.
-
-    CONTRACT
-        In:     rgb_path — an RGB PNG.
-                tau_lo — the shadow threshold on the 0-255 value scale.  NO
-                DEFAULT, never hardcoded, for the same reason as tau_hi: it is a
-                measurement parameter, and it is recorded on the Batch node.
-        Out:    one float in [0, 1]:
-
-                    clip_lo_fraction = |{ V <= tau_lo }| / N ,   V = max(R,G,B)
-
-        Grade:  LowerIsBetter, one-sided: Pass iff <= maxClipLoFraction.
-        Purity: deterministic; no randomness, no global state.
-
-    THE TWO CLIP FACTORS USE THE SAME OPERATOR AND MEAN DIFFERENT QUANTIFIERS
-    Same operator as the highlight twin, different meaning — do not "fix" it:
-
-        V >= tau_hi   <=>   AT LEAST ONE channel is saturated      (exists)
-        V <= tau_lo   <=>   EVERY channel is crushed               (for all)
-
-    SOURCE
-        Shin et al., IROS 2019, eq. 7 — same source as the highlight factor.
-
-    STUDENT IMPLEMENTATION (instruction.md §5.2): implemented BY STUDENTS.
-        The reference body below ships only so the pipeline can be tested end
-        to end; the handout strips it to a `#TODO` stub, and this docstring's
-        CONTRACT is the assignment.
-    """
-    # WHY NOT min(R,G,B) <= tau_lo, the apparently symmetric alternative?  Because
-    # it is wrong: pure red (255,0,0) has G = B = 0, so a fully saturated pixel
-    # would be counted as crushed.  max(R,G,B) <= tau_lo is the test that means
-    # "every channel is dark", which is what a crushed pixel actually is.
+    """ShadowClipping: |{V <= tau_lo}| / N, LowerIsBetter, Pass iff <= maxClipLoFraction. tau_lo has no default. Full contract: docs/factors.md."""
     V = _value_channel(rgb_path)
     return float(np.count_nonzero(V <= tau_lo)) / float(V.size)
 
@@ -421,11 +329,7 @@ def frame_clip_lo_fraction(rgb_path, tau_lo):
 #   (IdentityMedianDepthChange, PriorWarpDepthResidual).
 # =============================================================================
 def _consumer_depth_metres_valid(depth_path):
-    """Read one uint16-mm depth raster under the ICP consumer's validity rule.
-
-    Active depth factors use exactly the consumer rule: every non-zero return
-    is valid, matching ``utils.depth_image_to_point_cloud``.
-    """
+    """One uint16-mm depth raster as (metres, valid mask) under the consumer rule raw != 0."""
     raw = np.asarray(Image.open(depth_path))
     if raw.ndim != 2:
         raise ValueError(f"depth raster must be two-dimensional, got {raw.shape}")
@@ -434,7 +338,7 @@ def _consumer_depth_metres_valid(depth_path):
 
 
 def _flag_mask(flagged):
-    """Boolean drop flags -> the on-disk mask convention (uint8 0/255)."""
+    """Boolean drop flags -> on-disk mask convention (uint8 0/255)."""
     return np.where(flagged, np.uint8(255), np.uint8(0))
 
 
@@ -447,11 +351,7 @@ def _fully_valid_3x3(valid):
 
 
 def _high_frequency_depth_residual(depth_path, residual_mask_k):
-    """Shared scalar/mask computation for HighFrequencyDepthResidual.
-
-    STUDENT IMPLEMENTATION target (instruction.md §5.2) — stripped to a
-    `#TODO` stub in the student-facing distribution.
-    """
+    """Shared scalar/mask core of HighFrequencyDepthResidual (Immerkaer, metres, LowerIsBetter). Full contract: docs/factors.md."""
     metres, valid = _consumer_depth_metres_valid(depth_path)
     flagged = np.zeros(valid.shape, dtype=bool)
     windows = _fully_valid_3x3(valid)
@@ -480,22 +380,12 @@ def _high_frequency_depth_residual(depth_path, residual_mask_k):
 
 
 def frame_high_frequency_depth_residual(depth_path, residual_mask_k=5.0):
-    """Robust high-frequency depth residual in metres (LowerIsBetter).
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """Robust high-frequency depth residual in metres (LowerIsBetter). Student-implemented (README.md S5.2). Full contract: docs/factors.md."""
     return _high_frequency_depth_residual(depth_path, residual_mask_k)[0]
 
 
 def frame_high_frequency_depth_residual_mask(depth_path, residual_mask_k=5.0):
-    """255 where HighFrequencyDepthResidual recommends dropping a pixel.
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """255 where HighFrequencyDepthResidual recommends dropping a pixel. Full contract: docs/factors.md."""
     return _high_frequency_depth_residual(depth_path, residual_mask_k)[1]
 
 
@@ -516,11 +406,7 @@ def _local_extrema(values, valid, radius):
 
 
 def _flying_pixel_ratio(depth_path, window, planarity_tol):
-    """Plane-discriminated mixed-boundary pixels and their drop mask.
-
-    STUDENT IMPLEMENTATION target (instruction.md §5.2) — stripped to a
-    `#TODO` stub in the student-facing distribution.
-    """
+    """Shared scalar/mask core of FlyingPixelRatio (fraction, LowerIsBetter). Full contract: docs/factors.md."""
     metres, valid = _consumer_depth_metres_valid(depth_path)
     flagged = np.zeros(valid.shape, dtype=bool)
     if not valid.any():
@@ -583,34 +469,20 @@ def _flying_pixel_ratio(depth_path, window, planarity_tol):
 
 def frame_flying_pixel_ratio(depth_path, flying_pixel_window=5,
                              flying_pixel_planarity_tol=0.03):
-    """Fraction of planar-fit-discriminated flying pixels (LowerIsBetter).
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """Planar-fit-discriminated flying-pixel fraction (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
     return _flying_pixel_ratio(
         depth_path, flying_pixel_window, flying_pixel_planarity_tol)[0]
 
 
 def frame_flying_pixel_ratio_mask(depth_path, flying_pixel_window=5,
                                   flying_pixel_planarity_tol=0.03):
-    """255 where FlyingPixelRatio recommends dropping a pixel.
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """255 where FlyingPixelRatio recommends dropping a pixel. Full contract: docs/factors.md."""
     return _flying_pixel_ratio(
         depth_path, flying_pixel_window, flying_pixel_planarity_tol)[1]
 
 
 def _valid_tile_coverage(depth_path, tile_size, tile_valid_floor):
-    """Tile-level valid-return coverage and its drop mask.
-
-    STUDENT IMPLEMENTATION target (instruction.md §5.2) — stripped to a
-    `#TODO` stub in the student-facing distribution.
-    """
+    """Shared scalar/mask core of ValidTileCoverage (fraction, HigherIsBetter). Full contract: docs/factors.md."""
     metres, valid = _consumer_depth_metres_valid(depth_path)
     del metres
     size = int(round(float(tile_size)))
@@ -635,33 +507,18 @@ def _valid_tile_coverage(depth_path, tile_size, tile_valid_floor):
 
 
 def frame_valid_tile_coverage(depth_path, tile_size=64, tile_valid_floor=0.5):
-    """Fraction of depth tiles meeting the declared valid-return floor
-    (HigherIsBetter).
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """Supported-tile fraction (HigherIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
     return _valid_tile_coverage(depth_path, tile_size, tile_valid_floor)[0]
 
 
 def frame_valid_tile_coverage_mask(depth_path, tile_size=64,
                                    tile_valid_floor=0.5):
-    """255 over every tile below the declared valid-return floor.
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """255 over every tile below the valid-return floor. Full contract: docs/factors.md."""
     return _valid_tile_coverage(depth_path, tile_size, tile_valid_floor)[1]
 
 
 def _identity_median_depth_change(d0_path, d1_path, change_mask_k):
-    """Median |D0 - D1| at identity over jointly valid pixels, plus drop mask.
-
-    STUDENT IMPLEMENTATION target (instruction.md §5.2) — stripped to a
-    `#TODO` stub in the student-facing distribution.
-    """
+    """Shared scalar/mask/count core of IdentityMedianDepthChange (metres, LowerIsBetter). Full contract: docs/factors.md."""
     d0, v0 = _consumer_depth_metres_valid(d0_path)
     d1, v1 = _consumer_depth_metres_valid(d1_path)
     flagged = np.zeros(d0.shape, dtype=bool)
@@ -687,31 +544,17 @@ def _identity_median_depth_change(d0_path, d1_path, change_mask_k):
 
 
 def pair_identity_median_depth_change(d0_path, d1_path, change_mask_k=3.0):
-    """Median absolute depth change at identity, in metres (LowerIsBetter).
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """Median |D0-D1| at identity in metres (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
     return _identity_median_depth_change(d0_path, d1_path, change_mask_k)[0]
 
 
 def pair_identity_median_depth_change_mask(d0_path, d1_path, change_mask_k=3.0):
-    """255 where IdentityMedianDepthChange recommends dropping a pixel.
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """255 where IdentityMedianDepthChange recommends dropping a pixel. Full contract: docs/factors.md."""
     return _identity_median_depth_change(d0_path, d1_path, change_mask_k)[1]
 
 
 def _joint_valid_depth_ratio(d0_path, d1_path):
-    """Fraction of pixels valid in BOTH frames, plus the not-joint drop mask.
-
-    STUDENT IMPLEMENTATION target (instruction.md §5.2) — stripped to a
-    `#TODO` stub in the student-facing distribution.
-    """
+    """Shared scalar/mask/count core of JointValidDepthRatio ([0,1], HigherIsBetter). Full contract: docs/factors.md."""
     d0, v0 = _consumer_depth_metres_valid(d0_path)
     d1, v1 = _consumer_depth_metres_valid(d1_path)
     flagged = np.ones(d0.shape, dtype=bool)
@@ -723,22 +566,12 @@ def _joint_valid_depth_ratio(d0_path, d1_path):
 
 
 def pair_joint_valid_depth_ratio(d0_path, d1_path):
-    """Jointly-valid depth pixel fraction in [0, 1] (HigherIsBetter).
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """Jointly-valid depth fraction in [0,1] (HigherIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
     return _joint_valid_depth_ratio(d0_path, d1_path)[0]
 
 
 def pair_joint_valid_depth_ratio_mask(d0_path, d1_path):
-    """255 where a pixel is NOT valid in both frames.
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """255 where a pixel is NOT valid in both frames. Full contract: docs/factors.md."""
     return _joint_valid_depth_ratio(d0_path, d1_path)[1]
 
 
@@ -763,15 +596,7 @@ def _camera_intrinsics(intrinsics, shape):
 
 
 def _prior_warp(d0_m, d1_m, prior_T, intrinsics, depth_gate):
-    """Warp depth-0 pixels into depth 1 and return residual/support rasters.
-
-    ``prior_T`` maps camera-0 coordinates into camera-1 coordinates.  Residuals
-    are stored at source-image coordinates, which makes the resulting drop mask
-    directly applicable to frame 0's cloud.
-
-    STUDENT IMPLEMENTATION target (instruction.md §5.2) — stripped to a
-    `#TODO` stub in the student-facing distribution.
-    """
+    """Warp depth-0 pixels into depth 1; residual/support/projected rasters at source coordinates. Full contract: docs/factors.md."""
     d0 = np.asarray(d0_m, dtype=np.float64)
     d1 = np.asarray(d1_m, dtype=np.float64)
     if d0.shape != d1.shape or d0.ndim != 2:
@@ -824,11 +649,7 @@ def _prior_warp(d0_m, d1_m, prior_T, intrinsics, depth_gate):
 
 
 def _prior_warp_depth_residual(d0_path, d1_path, prior_T, intrinsics, depth_gate):
-    """Median prior-warp depth residual in metres, plus drop mask and count.
-
-    STUDENT IMPLEMENTATION target (instruction.md §5.2) — stripped to a
-    `#TODO` stub in the student-facing distribution.
-    """
+    """Shared scalar/mask/count core of PriorWarpDepthResidual (metres, LowerIsBetter). Full contract: docs/factors.md."""
     d0, _ = _consumer_depth_metres_valid(d0_path)
     d1, _ = _consumer_depth_metres_valid(d1_path)
     if d0.shape != d1.shape:
@@ -845,24 +666,14 @@ def _prior_warp_depth_residual(d0_path, d1_path, prior_T, intrinsics, depth_gate
 
 def pair_prior_warp_depth_residual(d0_path, d1_path, prior_T, intrinsics,
                                    prior_warp_depth_gate=0.10):
-    """Median depth residual under the constant-velocity prior (LowerIsBetter).
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """Median residual under the constant-velocity prior (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
     return _prior_warp_depth_residual(
         d0_path, d1_path, prior_T, intrinsics, prior_warp_depth_gate)[0]
 
 
 def pair_prior_warp_depth_residual_mask(d0_path, d1_path, prior_T, intrinsics,
                                         prior_warp_depth_gate=0.10):
-    """255 where the prior-warp residual exceeds the declared depth gate.
-
-    Implemented BY STUDENTS (instruction.md §5.2): the reference body ships
-    only so the pipeline can be tested end to end; the handout strips it to a
-    `#TODO` stub. Exact contract: definitions.md and the factor tests.
-    """
+    """255 where the prior-warp residual exceeds the depth gate. Full contract: docs/factors.md."""
     return _prior_warp_depth_residual(
         d0_path, d1_path, prior_T, intrinsics, prior_warp_depth_gate)[1]
 
@@ -871,17 +682,12 @@ def pair_prior_warp_depth_residual_mask(d0_path, d1_path, prior_T, intrinsics,
 # Frame pairing  (rgb/*.png <-> depth/*.png by integer stem, iterate sorted by int)
 # =============================================================================
 def _stem(path):
-    """Integer filename stem of a frame path (e.g. '.../17.png' -> 17)."""
+    """Integer filename stem of a frame path ('.../17.png' -> 17)."""
     return int(os.path.splitext(os.path.basename(path))[0])
 
 
 def _pair_frames(data_dir):
-    """Return [(stem_str, rgb_path, depth_path), ...] paired by int stem, sorted by int.
-
-    `data_dir` must contain `rgb/` and `depth/` subdirs of integer-stem .png frames.
-    Only stems present in BOTH subdirs are yielded. A `semantic/` subdir, if
-    present, is ignored.
-    """
+    """[(stem, rgb, depth)] paired by int stem, sorted. Full strategy note: docs/triplestore.md."""
     rgb_dir = os.path.join(data_dir, "rgb")
     depth_dir = os.path.join(data_dir, "depth")
     if not os.path.isdir(rgb_dir) or not os.path.isdir(depth_dir):
@@ -930,135 +736,74 @@ _EXPNAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
 def batch_name(data_dir, floor):
-    """Floor-qualified batch name: f"floor{floor}_{basename(data_dir)}".
-
-    Both floors ship captures with the same directory names, so a basename alone
-    is not a unique key: floor 1's `mixed_dev` and floor 2's `mixed_dev` would map
-    to ONE batch IRI and silently overwrite each other — and comparing the two
-    floors is exactly what phase 2 asks you to do.  This name is what goes into
-    hw1:batchName and into the batch IRI.
-    """
+    """Floor-qualified batch name floor{floor}_{basename}. Full strategy note: docs/triplestore.md."""
     return f"floor{int(floor)}_{os.path.basename(os.path.normpath(data_dir))}"
 
 
 def batch_iri(name):
-    """IRI of a batch node: <ns>batch/<name>."""
+    """Batch node IRI <ns>batch/<name>. Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}batch/{name}")
 
 
 def frame_iri(name, idx):
-    """IRI of a frame node: <ns>batch/<name>/frame/<n>, `n` decimal and unpadded.
-
-    Unpadded is a decision, not an oversight: `frame/7` and `frame/007` are
-    different IRIs, so a padded writer and an unpadded reader would build two
-    disjoint graphs that look identical in a listing. `_stem` returns an int and
-    everything downstream formats that int, so there is one spelling per frame.
-    """
+    """Frame node IRI, <n> decimal unpadded. Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}batch/{name}/frame/{idx}")
 
 
 def component_iri(name, idx, kind):
-    """IRI of a frame's rgb or depth image node: <ns>batch/<name>/frame/<n>/<kind>.
-
-    `kind` is "rgb" or "depth". The image node is a separate subject from the
-    frame because the two rasters are two files with two paths, and a query that
-    wants the picture wants one of them, not both.
-
-    IT IS NOT THE OBSERVATION, WHICH IS A CHANGE FROM v1 (§4.3). In
-    v1 the observables hung here: clipHiFraction on the RGBImage,
-    validDepthFraction on the DepthImage, scoped by the experiment's named graph.
-    With one graph that shape is broken — two experiments would write two
-    contradictory hw1:clipHiFraction triples onto one image node. So an image node
-    now carries `schema:contentUrl` and NOTHING ELSE, and the numbers live on the
-    experiment-scoped FrameAnnotation (see `annotation_iri`).
-    """
+    """Image node IRI (rgb|depth); carries contentUrl ONLY, never observables. Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}batch/{name}/frame/{idx}/{kind}")
 
 
 def generation_setting_iri(name, param):
-    """IRI of a batch's generation setting: <ns>batch/<name>/setting/<param>.
-
-    BATCH-scoped, not experiment-scoped, and that placement is the whole point of
-    the role (§4.2): a GenerationSetting describes how the PIXELS were
-    produced, so it survives every re-measurement of them and no experiment
-    re-asserts it. `<param>` is the parameter's local name, which is globally
-    unique across factors (§2), so no factor segment is needed here.
-    """
+    """Batch-scoped generation-setting IRI. Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}batch/{name}/setting/{param}")
 
 
 def experiment_iri(expname):
-    """IRI of an experiment: <ns>experiment/<expname>.
-
-    Every node the experiment mints hangs under this prefix — settings,
-    annotations, pairs, runs — and that is the entirety of the isolation
-    mechanism. v1 ALSO loaded each experiment's triples into a named graph of this
-    same IRI; there are no named graphs any more (§2), because Turtle
-    cannot carry a graph name and one missed `to_graph` produced a silent zero-row
-    query against two perfectly well-formed files.
-
-    SIGNATURE CHANGED IN v3 (§6/§8): the argument is the experiment's
-    NAME — the stem of the declaration file, matching [A-Za-z0-9_-]+ — not an
-    8-hex digest. The digest is deleted: it identified a treatment, but the file
-    was machine-named and therefore unreadable, and write-once (§3.1) now buys
-    what the digest bought. The STUDENT writes this IRI in the declaration and
-    `experiment` checks its tail against the file stem rather than picking one.
-    """
+    """Experiment IRI <ns>experiment/<expname>; the isolation prefix. Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}experiment/{expname}")
 
 
 def setting_iri(expname, factor_local, param_local):
-    """IRI of one experiment's setting of one parameter:
-    <ns>experiment/<expname>/setting/<factor>/<param>.
-
-    `factor_local` is the local name of the parameter's hw1:paramPrimaryFactor,
-    `param_local` the parameter's own local name (§2).
-
-    ONLY MACHINE-MINTED SETTINGS USE THIS. A student's FactorSettings may be blank
-    nodes or any IRI at all (§2/§4.5) — a machine pass cannot re-open
-    somebody else's blank node, and it does not need to: attribution traverses
-    setting -> settingParameter -> paramPrimaryFactor / paramAffectsFactor in the
-    TBox. What this function names are the DEFAULTS that `experiment` records
-    below the marker to complete the required set (§4.2).
-
-    WHY THE FACTOR SEGMENT, GIVEN THAT PARAMETER NAMES ARE ALREADY UNIQUE
-        Not for disambiguation — `<expname>/setting/tauHi` would be unique on its
-        own. It is there so the IRI reads as the sentence `explore` prints: "under
-        HighlightClipping, tauHi was 250". Only the PRIMARY factor appears, and in
-        v3 hw1:settingForFactor is single-valued for the same reason (§4.5).
-
-    WHY SETTINGS ARE EXPERIMENT-SCOPED RATHER THAN TBox INDIVIDUALS
-        A threshold is a per-experiment LEVEL, not a global Band. Measure one
-        batch twice at two tauHi values and there must be two setting nodes; if the
-        IRI did not carry the experiment name they would be one node with two
-        contradictory hw1:settingValue triples — precisely the collision named
-        graphs used to prevent, reappearing in the settings instead of the values.
-    """
+    """Experiment-scoped machine-minted setting IRI (defaults completing the required set). Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}experiment/{expname}/setting/{factor_local}/{param_local}")
 
 
+def data_batch_iri(name):
+    return URIRef(f"{DATA_NS}batch/{name}")
+
+
+def data_frame_iri(name, idx):
+    return URIRef(f"{DATA_NS}batch/{name}/frame/{int(idx)}")
+
+
+def data_component_iri(name, idx, kind):
+    if kind not in ("rgb", "depth"):
+        raise ValueError(f"unknown image kind {kind!r}")
+    return URIRef(f"{DATA_NS}batch/{name}/{kind}/{int(idx)}")
+
+
+def data_experiment_iri(expname):
+    return URIRef(f"{DATA_NS}experiment/{expname}")
+
+
+def data_setting_iri(expname, factor_local, param_local):
+    return URIRef(f"{DATA_NS}experiment/{expname}/setting/{factor_local}_{param_local}")
+
+
+def data_run_iri(expname, mode):
+    return URIRef(f"{DATA_NS}experiment/{expname}/run/{mode}")
+
+
+def data_factor_iri(expname, factor_local, current_idx, previous_idx=None):
+    local = (f"{factor_local}_{int(previous_idx)}_{int(current_idx)}"
+             if previous_idx is not None else f"{factor_local}_{int(current_idx)}")
+    return URIRef(f"{DATA_NS}experiment/{expname}/factor/{local}")
+
+
 def annotation_iri(expname, idx, kind):
-    """IRI of one experiment's annotation of one frame's ONE MODALITY:
-    <ns>experiment/<expname>/annotation/<n>/<kind>, `kind` in "rgb" | "depth".
-
-    SIGNATURE CHANGED IN v3 (§2/§8): the `<kind>` segment is new.
-    Annotations are PER MODALITY now, because selection is: an experiment that
-    evaluates only depth factors has nothing to say about the rgb raster, and a
-    single per-frame node would have had to carry either a hole or a fiction. A
-    modality with no selected factor gets NO node at all (§4.3), which is what
-    makes "a missing property is a bug, not a state" survive selection.
-
-    `n` is the frame's integer stem, decimal and unpadded, exactly as in
-    `frame_iri` — the annotation and the frame it annotates are numbered the same
-    way so a human can read one off the other.
-
-    The annotation, not the image node, is the OBSERVATION (§4.3): it
-    carries the values and their statuses, and its IRI carries the experiment
-    name. That is what satisfies RDF Data Cube IC-12 without named graphs — assess
-    one batch under two declarations and you get two annotation sets whose
-    `hw1:annotatesFrame` objects are the SAME frame IRIs, rather than two
-    contradictory triples on one subject.
-    """
+    """Per-modality annotation IRI; the OBSERVATION node (values+statuses). Full strategy note: docs/triplestore.md."""
     if kind not in _ANNOTATION_KINDS:
         raise ValueError(
             f"annotation kind {kind!r} is not one of {', '.join(_ANNOTATION_KINDS)}; "
@@ -1067,70 +812,38 @@ def annotation_iri(expname, idx, kind):
 
 
 def pair_iri(expname, i, j):
-    """IRI of one experiment's frame pair: <ns>experiment/<expname>/pair/<i>_<j>.
-
-    SIGNATURE CHANGED IN v2 (§8). This used to be
-    `pair_iri(batch_name, i, j)` over a batch-scoped node, because `batch2ttl` wrote
-    FramePair skeletons that every experiment then decorated. It no longer does: a
-    pair is two links and an index, so caching it in the batch file bought nothing
-    and forced two experiments to write contradictory observables onto one node.
-
-    `i` is the EARLIER stem. The pair is ORDERED — hw1:sourceFrame is the ICP
-    source, hw1:targetFrame the target — so `<i>_<j>` and `<j>_<i>` are different
-    nodes and only the ascending one is ever minted.
-
-    STEMS, NOT ORDINALS, IN THE IRI. Pair `41_43` is a legitimate pair over a gap
-    in the capture (see `build_batch_graph`, which warns about exactly that), and
-    naming the node by position would hide that gap inside a tidy-looking index.
-    The ordinal is carried separately by hw1:pairIndex, where a query can
-    ORDER BY it as an integer instead of parsing an IRI (§2).
-    """
+    """Ordered experiment-scoped pair IRI <i>_<j>, stems not ordinals. Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}experiment/{expname}/pair/{i}_{j}")
 
 
 def run_iri(expname, mode):
-    """IRI of a reconstruction run: <ns>experiment/<expname>/run/<mode>.
-
-    `mode` is "baseline" (hw1:FullBatch), "selected" (hw1:GoodSegments), or
-    "masked" (hw1:MaskFiltered). The runs of one experiment differ only in this
-    segment, which is what makes the
-    baseline-vs-selected comparison — the deliverable — impossible to lose by
-    collision. v1 minted an entire derived experiment (`<id>-sel-<6hex>`) for the
-    selected run; §6 deletes that machinery, because all run modes
-    share a batch and setting vector and therefore belong to one experiment.
-    """
+    """Run IRI <exp>/run/<mode> (baseline|selected|masked). Full strategy note: docs/triplestore.md."""
     return URIRef(f"{NS}experiment/{expname}/run/{mode}")
 
 
-def frame_index_from_iri(iri):
-    """Frame OR annotation IRI -> its integer stem. THE tail parse; there is no second.
+def factor_iri(expname, factor_local, current_idx, previous_idx=None):
+    """Readable, experiment-scoped IRI for one Factor occurrence.
 
-    `reconstruct.py` needs integer stems and reads only an experiment file, but
-    `hw1:frameIndex` lives in the BATCH graph — so the stem has to come out of the
-    IRI. That is open item O8, resolved in §9 in favour of the tail
-    parse WITH the parse confined to this function. Import it; do not re-derive
-    it. If the scheme ever changes, this function and `batch_name_from_frame_iri`
-    are the only two places that have to notice.
-
-    TWO SHAPES, ONE IMPLEMENTATION (§8): the frame IRI
-    `<ns>batch/<name>/frame/<n>` and — new in v3, because annotations are
-    per modality — the annotation IRI `<ns>experiment/<expname>/annotation/<n>/<kind>`.
-    Both carry the same `<n>`, and a second `split("/")` somewhere else for the
-    second shape is exactly the duplication this function exists to prevent.
-
-    Strict on purpose: `n` must be a decimal integer and the annotation's `<kind>`
-    must be one of the two frozen modality segments. A component IRI
-    (.../frame/7/depth) and anything outside the scheme raise ValueError rather
-    than returning a plausible-looking number, because a frame list silently short
-    by the frames it could not parse is the kind of bug that shows up as a
-    slightly worse reconstruction score and never as an error.
+    The definition is part of the key (not merely a label): two selected
+    definitions over the same image are distinct occurrences.  Pair keys retain
+    the ordered source/target stems.  Keeping this helper beside the other IRI
+    constructors prevents consumers from inferring occurrence identity from
+    predicates or mask paths.
     """
+    local = f"{factor_local}_{int(previous_idx)}_{int(current_idx)}" if previous_idx is not None \
+        else f"{factor_local}_{int(current_idx)}"
+    return URIRef(f"{NS}experiment/{expname}/factor/{local}")
+
+
+def frame_index_from_iri(iri):
+    """Frame/annotation IRI -> int stem. THE tail parse; do not re-derive. Full strategy note: docs/triplestore.md."""
     text = str(iri)
     expected = (f"{NS}batch/<name>/frame/<n> or "
+                f"{DATA_NS}batch/<name>/frame/<n> or "
                 f"{NS}experiment/<expname>/annotation/<n>/<kind>")
-    if text.startswith(f"{NS}batch/") and "/frame/" in text:
+    if (text.startswith(f"{NS}batch/") or text.startswith(f"{DATA_NS}batch/")) and "/frame/" in text:
         tail = text.split("/frame/", 1)[1]
-    elif text.startswith(f"{NS}experiment/") and "/annotation/" in text:
+    elif (text.startswith(f"{NS}experiment/") or text.startswith(f"{DATA_NS}experiment/")) and "/annotation/" in text:
         tail, _, kind = text.split("/annotation/", 1)[1].partition("/")
         if kind not in _ANNOTATION_KINDS:
             raise ValueError(
@@ -1148,50 +861,42 @@ def frame_index_from_iri(iri):
 
 
 def batch_name_from_frame_iri(iri):
-    """Frame IRI -> the batch name embedded in it. The other half of the O8 parse.
-
-    Used to check that the experiment you are about to score was measured on the
-    capture you are about to reconstruct: scoring one batch and writing the number
-    into another batch's experiment is silent, unrecoverable, and takes one
-    mistyped `--data_root`.
-    """
+    """Frame IRI -> embedded batch name (batch-match guard). Full strategy note: docs/triplestore.md."""
     text = str(iri)
     prefix = f"{NS}batch/"
+    data_prefix = f"{DATA_NS}batch/"
     marker = "/frame/"
-    if not text.startswith(prefix) or marker not in text:
+    if not ((text.startswith(prefix) or text.startswith(data_prefix)) and marker in text):
         raise ValueError(
             f"not a frame IRI of this assignment: {text!r} "
             f"(expected {NS}batch/<name>/frame/<n>)")
-    return text[len(prefix):].split(marker, 1)[0]
+    base = prefix if text.startswith(prefix) else data_prefix
+    return text[len(base):].split(marker, 1)[0]
 
 
 def _batch_name_from_batch_iri(iri):
-    """Batch IRI -> its <name>. Private: batch IRIs are not parsed outside this file."""
+    """Batch IRI -> its <name>. Private."""
     text = str(iri)
     prefix = f"{NS}batch/"
-    if not text.startswith(prefix):
+    data_prefix = f"{DATA_NS}batch/"
+    if not (text.startswith(prefix) or text.startswith(data_prefix)):
         raise ValueError(f"not a batch IRI of this assignment: {text!r} "
                          f"(expected {NS}batch/<name>)")
-    return text[len(prefix):]
+    base = prefix if text.startswith(prefix) else data_prefix
+    return text[len(base):]
 
 
 def _experiment_name_from_iri(iri, path=None):
-    """Experiment IRI -> its <expname>. The v3 replacement for the 8-hex id parse.
-
-    Everything the assessment mints hangs under this name (§2), so `write_run`
-    mints its run IRI from it and `read_experiment` reports it. The name is
-    checked against `_EXPNAME_RE` here rather than only at declaration time,
-    because a hand-edited Experiment IRI with a slash in its tail would otherwise
-    mint `…/experiment/a/b/run/baseline` — a well-formed IRI under a different
-    scheme, joined to nothing, reported by nothing.
-    """
+    """Experiment IRI -> <expname>, validated against _EXPNAME_RE. Full strategy note: docs/triplestore.md."""
     text = str(iri)
     prefix = f"{NS}experiment/"
+    data_prefix = f"{DATA_NS}experiment/"
     where = f"{path}: " if path else ""
-    if not text.startswith(prefix):
+    if not (text.startswith(prefix) or text.startswith(data_prefix)):
         raise ValueError(f"{where}not an experiment IRI of this assignment: {text!r} "
                          f"(expected {NS}experiment/<expname>)")
-    name = text[len(prefix):]
+    base = prefix if text.startswith(prefix) else data_prefix
+    name = text[len(base):]
     if not _EXPNAME_RE.match(name):
         raise ValueError(
             f"{where}experiment IRI tail {name!r} is not a legal experiment name "
@@ -1237,7 +942,7 @@ _EXPERIMENT_ROLES = ("MeasurementSetting", "QualificationSetting")
 
 
 def _local(term):
-    """Local name of a term in the hw1 namespace ('...#tauHi' -> 'tauHi')."""
+    """Local name of a term in the hw1 namespace."""
     text = str(term)
     if text.startswith(NS):
         return text[len(NS):]
@@ -1245,74 +950,12 @@ def _local(term):
 
 
 def _storable(value):
-    """A double, rounded to the precision the .ttl file can actually hold.
-
-    READ THIS BEFORE "SIMPLIFYING" IT AWAY. rdflib's Turtle serializer does not
-    honour the lexical form of an xsd:double at all: it re-derives one from the
-    value as `f"{float(v):e}"` — SEVEN significant digits — and then strips the
-    mantissa's trailing zeros (rdflib 7.1.4, `term.Literal._literal_n3`). So
-    `Literal("0.20000000000000018", datatype=XSD.double)` and `Literal(0.2, ...)`
-    are the identical five bytes `2e-01` on disk, and a value read back out of the
-    file is NOT the value that went in.
-
-    That matters here and nowhere else in this project, because v2 bakes a verdict
-    next to every value (§4.5) and calls the verdict "a denormalised
-    cache whose truth is (value + settings)". Grade the in-memory 0.20000000000000018
-    against a threshold of 0.2 and you write `Fail`; the file then reads
-    `hw1:medianDepthDifference 2e-01 ; hw1:medianDepthDifferenceStatus hw1:Fail`,
-    which is a self-contradicting record, and a student re-grading the stored value
-    by hand gets the opposite answer. Depth
-    rasters are quantised to the millimetre, so medians land exactly on round
-    threshold values often — this is not a hypothetical.
-
-    Rounding here makes the stored number and the graded number THE SAME NUMBER.
-    The cost is 1e-7 relative on a measurement whose file only ever held 7 digits
-    anyway; the gain is that the file is internally consistent and re-grading a
-    stored value always reproduces the stored verdict. Non-finite values pass
-    through untouched: `f"{inf:e}"` is `"inf"`, which floats back to `inf`.
-
-    §5 asks for the `.17g` digest repr as the lexical form of a
-    settingValue. That is not achievable through rdflib (see above) and the
-    property §5 wanted — one value, one lexical form, so `STR(?value)` comparison
-    is exact — holds anyway, because the written form is a pure function of the
-    value. Report it if a future serializer makes the full form reachable.
-    """
+    """Round a double to the precision the .ttl file holds (rdflib: 7 sig digits); non-finite passes through. Full strategy note: docs/triplestore.md."""
     return float(f"{float(value):e}")
 
 
 def _double_literal(value):
-    """One xsd:double literal, the one way (§4.6).
-
-    Every double this project writes — observable values, thresholds, run results —
-    goes through here, so `INF` / `-INF` / `NaN` are spelled the same way
-    everywhere and every number is stored at the precision it was graded at (see
-    `_storable`). `xsd:decimal` is not an option for any of them precisely because
-    it cannot carry INF, and the measurers are fail-closed: they return INF or 0.0
-    rather than raising (§9), so a non-finite value is a NORMAL
-    outcome here, not an error path.
-
-    THE NON-FINITE LEXICAL FORMS ARE WRITTEN OUT BY HAND, AND THAT IS NOT
-    BELT-AND-BRACES. XSD 1.1 admits exactly `INF`, `-INF` and `NaN` in the lexical
-    space of xsd:double; Python's `str(float('inf'))` is `'inf'`, which is NOT in
-    it. Hand rdflib a float and it stores `'inf'` as the literal's lexical form —
-    `str(Literal(float("inf"), datatype=XSD.double))` really is `'inf'`, and so is
-    `str(Literal("INF", datatype=XSD.double))`, because rdflib normalises the
-    lexical form it was given back through `str(float)`. The Turtle file comes out
-    correct anyway, but ONLY because rdflib's serializer patches it at the last
-    moment with `encoded.replace("inf", "INF")` (7.1.4, `term.Literal._literal_n3`).
-
-    Depending on that fixup is not acceptable for a value whose whole job is to be
-    seen. An ill-typed literal does not raise in SPARQL — it makes every comparison
-    on it FALSE, so a strict engine reading `"inf"^^xsd:double` would silently drop
-    exactly the fail-closed rows the convention exists to surface, and the symptom
-    would be a short result set rather than an error. `normalize=False` keeps the
-    XSD-valid spelling we passed in, so the literal is correct in memory as well as
-    on disk and stays correct under any serializer.
-
-    Finite values still go in as floats: for those, rdflib re-derives the lexical
-    form from the value regardless of what it is handed (see `_storable`), so
-    spelling one out here would buy nothing and could drift from what is written.
-    """
+    """The one way to write xsd:double (S4.6): graded precision, XSD-valid INF/-INF/NaN. Full strategy note: docs/triplestore.md."""
     v = _storable(value)
     # NaN is the only value that is not equal to itself — the cheapest exact test,
     # and it avoids importing `math` for three comparisons.
@@ -1326,21 +969,7 @@ def _double_literal(value):
 
 
 def _setting_value_literal(value, kind):
-    """One `hw1:settingValue` literal, typed per the parameter's declared kind.
-
-    §5: "double" -> xsd:double, "integer" -> xsd:integer, "string" ->
-    xsd:string. The KIND comes from the TBox DECLARATION, never from the Python type
-    of `value` — the same rule `parse_setting_arg` follows, and the reason
-    `icpBackend` is an ordinary parameter rather than a special case. Guessing from
-    the type would let the string "1" arrive as the number 1 somewhere between the
-    command line and the file, and nothing downstream could tell.
-
-    xsd:string is written EXPLICITLY rather than as a plain literal, because rdflib
-    does not treat the two as equal — the same trap §5 warns about for
-    `hw1:paramDefault`, which the TBox types as `"open3d"^^xsd:string`. Writing the
-    datatype means an rdflib-side comparison of a setting against its default is a
-    comparison of two terms of one type.
-    """
+    """Typed literal for a setting value by parameter kind. Full strategy note: docs/triplestore.md."""
     if kind == "string":
         return Literal(str(value), datatype=XSD.string)
     if kind == "integer":
@@ -1349,66 +978,7 @@ def _setting_value_literal(value, kind):
 
 
 def load_parameter_declarations(path=_ONTOLOGY_TTL):
-    """Read every declared `hw1:Parameter` out of the TBox. (Renamed in v2.)
-
-    CONTRACT
-        In:     path — the TBox Turtle (default hw1/ontology/hw1.ttl).
-        Out:    {local_name: {"iri":         URIRef,
-                              "role":        "GenerationSetting"
-                                             | "MeasurementSetting"
-                                             | "QualificationSetting",
-                              "kind":        "double" | "integer" | "string",
-                              "primary":     factor local name,
-                              "primaryIri":  URIRef,
-                              "affects":     (factor local name, ...),   # sorted
-                              "affectsIris": (URIRef, ...),              # same order
-                              "default":     float | int | str | None}}
-
-        read from `hw1:paramRole`, `hw1:paramValueKind`, `hw1:paramPrimaryFactor`,
-        `hw1:paramAffectsFactor` and `hw1:paramDefault` (§5).
-
-    WHAT EACH FIELD DECIDES
-        * `role` decides WHERE the setting lives and WHAT THE VERDICT IS. Generation
-          settings hang off the Batch (`hw1:hasGenerationSetting`) and are applied by
-          nothing — the pixels already embody them; Measurement and Qualification
-          settings hang off the Experiment (`hw1:hasFactorSetting`). The same field
-          is the fix instruction `explore`'s verdict section returns: Generation =>
-          regenerate the data, Measurement => change the number and re-measure,
-          Qualification => change the threshold and re-qualify (and the last two mean
-          a NEW declaration, §3.1). v1 had two classes here; v2 has one class and
-          three roles.
-        * `kind` decides PARSING and the datatype of `hw1:settingValue` —
-          xsd:double / xsd:integer / xsd:string. Declared per parameter rather than
-          guessed from the text, which is what makes `icpBackend` an ordinary
-          parameter instead of a special case: `hw1:settingValue "1"` for icpBackend is
-          the STRING "1", not the number 1.
-        * `primary` decides the SETTING IRI and the DIGEST LINE (§2/§6),
-          which is why the TBox declares it single-valued and mandatory: an ambiguous
-          primary factor would make one treatment hash two ways. `affects` never
-          appears in an IRI or a digest; it exists so `hw1:settingForFactor` can be
-          total and attribution can blame `brightnessGain` for a ShadowClipping
-          failure whose primary factor is HighlightClipping.
-        * `default` decides COMPLETENESS (§5). Every Measurement and
-          Qualification parameter is recorded on every experiment — given on the
-          command line, or filled from `hw1:paramDefault` and recorded EXPLICITLY —
-          because an experiment that omits `tauHi` is otherwise indistinguishable
-          from one that set it to 250, and then the digest identifies nothing. The
-          two Generation parameters carry NO default on purpose and get the opposite
-          treatment: absence means "not asserted", not "identity".
-
-    READING A DEFAULT: `.toPython()`, NEVER AN EQUALITY AGAINST A BARE Literal
-        §5 types every `hw1:paramDefault` explicitly, including the
-        string-valued one (`"open3d"^^xsd:string`). rdflib does not treat a plain
-        literal and an xsd:string-typed literal as equal, so
-        `default_term == Literal("open3d")` is False for the very declaration it is
-        checking. Cast through `.toPython()` and compare values, not terms.
-
-    Raises ValueError on any declaration this code would otherwise have to guess
-    at: an unknown role or value kind, a missing/multiple primary factor, or a
-    default that will not parse as its declared kind. An ambiguous TBox is a TBox
-    bug, and guessing which half to believe just moves the bug downstream into a
-    file that looks fine.
-    """
+    """TBox authority #1: what may be set and how it parses. Full strategy note: docs/triplestore.md."""
     g = Graph()
     g.parse(path, format="turtle")
     decls = {}
@@ -1467,27 +1037,7 @@ def load_parameter_declarations(path=_ONTOLOGY_TTL):
 
 
 def parse_setting_arg(arg, decls):
-    """Parse one `--gen NAME=VALUE` string. -> (name, value).
-
-    The value is typed by the DECLARATION, never by the text (§5): a
-    "double" parameter yields a float, an "integer" parameter an int, a "string"
-    parameter the text verbatim. Whitespace around the NAME is stripped; the value
-    is not touched, because a string level is data.
-
-    An undeclared name is FATAL, with the declared list printed. That is the point:
-    a typo surviving as an extra FactorSetting gives the batch a provenance record
-    that describes a treatment nobody ran, and every number measured over it then
-    looks perfectly plausible. (`--set` is deleted with v2, §7; the
-    declaration carries settings now and `read_declaration` applies the same rule
-    to them. This function survives for `--gen`, which is still a command-line
-    flag because a Generation setting describes pixels, not an experiment.)
-
-    An "integer" parameter is parsed STRICTLY — `someCount=20.5` is an error, not
-    a silent truncation: `int(20.5)` would record 20 while the shell history says
-    20.5. No parameter currently declares that kind (`minSegmentLength`, the only
-    one that ever did, was deleted on 2026-07-31), and the rule stays anyway —
-    the kinds come from the TBox, so the next count-valued parameter inherits it.
-    """
+    """Parse one NAME=VALUE setting against the TBox declarations. Full strategy note: docs/triplestore.md."""
     if "=" not in arg:
         raise ValueError(f"a setting expects NAME=VALUE, got {arg!r}")
     name, _, text = arg.partition("=")
@@ -1509,33 +1059,7 @@ def parse_setting_arg(arg, decls):
 
 
 def load_quality_factors(path=_ONTOLOGY_TTL):
-    """Read every declared `hw1:QualityFactor` out of the TBox (§8.0).
-
-    Returns {factor_local: {"over":        value property local name,
-                            "status":      status property local name,
-                            "polarity":    "higher" | "lower",
-                            "qualifiedBy": parameter local name}}
-
-    from `hw1:overProperty` / `hw1:statusProperty` / `hw1:polarity` /
-    `hw1:qualifiedBy`. Those four links are what make the whole grading path
-    generic: `status_for` reads the polarity and the threshold parameter instead of
-    branching per factor, and `explore`'s verdict section finds failing factors by
-    following `hw1:statusProperty` to the predicate and looking for hw1:Fail, without
-    naming one predicate.
-
-    STATUS PREDICATES ARE READ FROM HERE, NEVER BUILT BY CONCATENATION. The local
-    name of a status property is always the value property's plus "Status", and
-    that is exactly why the rule must not be coded: a factor added to the TBox with
-    a status property named any other way would silently stop being graded, and the
-    failure would look like "that factor always passes".
-
-    All four links are REQUIRED. A factor missing its polarity or its threshold
-    parameter cannot be graded, and returning None there would push a `None`
-    comparison into `status_for`, where the only available behaviours are "raise
-    somewhere less informative" and "invent a verdict". v1 tolerated the absence
-    because grading happened at query time against Bands that might simply not
-    match; v2 bakes the verdict, so the TBox has to be complete.
-    """
+    """TBox authority #2: what is measured, polarity, threshold link. Full strategy note: docs/triplestore.md."""
     g = Graph()
     g.parse(path, format="turtle")
     out = {}
@@ -1545,6 +1069,26 @@ def load_quality_factors(path=_ONTOLOGY_TTL):
         status = g.value(f, HW1.statusProperty)
         pol = g.value(f, HW1.polarity)
         qual = g.value(f, HW1.qualifiedBy)
+        # Semantic schema uses generic hw1:value/hw1:status on occurrences.
+        # Keep the internal observable key for measurement dispatch and grading;
+        # it is no longer serialized as a per-metric RDF predicate.
+        semantic = over is None and status is None and local in (
+            set(_FRAME_OBSERVABLES) | set(_PAIR_OBSERVABLES) |
+            {"HighlightClipping", "ShadowClipping", "HighFrequencyDepthResidual",
+             "FlyingPixelRatio", "ValidTileCoverage", "IdentityMedianDepthChange",
+             "JointValidDepthRatio", "PriorWarpDepthResidual"})
+        # Run-level definitions may also adopt generic result predicates.  They
+        # are retained for write_run compatibility, so use their own local name
+        # as the internal observable key when the new TBox omits legacy links.
+        if over is None and status is None and _semantic_schema_enabled(path):
+            semantic = True
+        if semantic:
+            aliases = {"HighlightClipping": "clipHiFraction", "ShadowClipping": "clipLoFraction",
+                       "HighFrequencyDepthResidual": "highFrequencyDepthResidual", "FlyingPixelRatio": "flyingPixelRatio",
+                       "ValidTileCoverage": "validTileCoverage", "IdentityMedianDepthChange": "identityMedianDepthChange",
+                       "JointValidDepthRatio": "jointValidDepthRatio", "PriorWarpDepthResidual": "priorWarpDepthResidual"}
+            over = URIRef(f"{NS}{aliases.get(local, local)}")
+            status = HW1.status
         missing = [n for n, t in (("hw1:overProperty", over),
                                   ("hw1:statusProperty", status),
                                   ("hw1:polarity", pol),
@@ -1566,52 +1110,7 @@ def load_quality_factors(path=_ONTOLOGY_TTL):
 
 
 def status_for(value_property_local, value, settings, factors=None):
-    """The ONE implementation of the §4.5 status rule. -> Pass | Fail.
-
-    CONTRACT
-        In:     value_property_local — the local name of the observable value
-                property being graded ("clipHiFraction", "mapMeanL2", ...).
-                value — the raw measured double, exactly as it will be STORED.
-                settings — {param_local: value}, the setting vector recorded on the
-                same experiment; the threshold is looked up in here and nowhere
-                else.
-                factors — `load_quality_factors()` output; loaded if omitted.
-        Out:    HW1.Pass or HW1.Fail.
-
-        With `t` the settingValue of the factor's `hw1:qualifiedBy` parameter:
-
-            hw1:HigherIsBetter    Pass iff value >= t
-            hw1:LowerIsBetter     Pass iff value <= t
-
-    WHY THE NON-FINITE CASES NEED NO SPECIAL CASE
-        IEEE comparison already does the right thing, and writing a branch for it
-        would be a chance to get it wrong. Every comparison with NaN is False, so
-        NaN falls through to Fail under either polarity — which is the frozen rule
-        ("NaN is always Fail"). The fail-closed measurer sentinels grade themselves:
-        INF fails a lower-is-better factor because `inf <= 0.20` is False, and 0.0
-        fails a higher-is-better factor because `0.0 >= 0.10` is False. The
-        BOUNDARY passes under both polarities, deliberately: the thresholds are
-        course-calibrated round numbers, and a value sitting exactly on one is
-        inside the interval the number was chosen to describe.
-
-    WHY A MISSING FACTOR AND A MISSING THRESHOLD BOTH RAISE
-        `hw1:meanValue` has no QualityFactor over it, on purpose (§4.3): no polarity, no threshold, nothing to compute a Pass from. Asking for
-        its status is a bug in the caller, and answering would quietly promote the
-        deliberately-weak baseline to a criterion. A missing THRESHOLD cannot happen
-        under the §5 completeness rule at all — every Qualification parameter is
-        recorded on every experiment — so if it happens the setting vector is not
-        total, and grading against a guessed number would bake a verdict nothing
-        can reproduce.
-
-    WHY THE VERDICT IS BAKED INTO THE FILE AT ALL, GIVEN THAT IT IS DERIVED
-        It is a denormalised cache whose truth is (value + settings), and the raw
-        value is always stored beside it, so re-grading at query time stays
-        possible — the stored value and the recorded threshold are both right there
-        in the file. What it buys is that reading a verdict is a lookup instead of a
-        four-way join against Band individuals — v1's shape, where the tie-break
-        between adjacent bands was a correctness trap that produced plausible wrong
-        answers.
-    """
+    """THE Pass rule (S4.5): value vs threshold by polarity, fail-closed on non-finite. Full strategy note: docs/triplestore.md."""
     factors = load_quality_factors() if factors is None else factors
     over = sorted(k for k, info in factors.items()
                   if info["over"] == value_property_local)
@@ -1675,18 +1174,7 @@ MACHINE_MARKER = "# ============ MACHINE SECTION (regenerated by api.py — do n
 
 
 def _marker_offset(text):
-    """Character offset of the START of the marker LINE in `text`, or None.
-
-    "Start of the line" is exactly what the seal is defined over (§3.1: the bytes
-    from offset 0 up to the start of the marker line), so this one number is both
-    the split point and the digest boundary — they cannot drift apart, because
-    there is only one of them.
-
-    The marker must occupy a WHOLE line: it has to begin at offset 0 or just after
-    a newline, and end at a newline or at end of file. A declaration that quotes
-    the marker inside a longer comment line therefore does not accidentally cut
-    itself in half.
-    """
+    """Locate MACHINE_MARKER in an experiment file. Full strategy note: docs/triplestore.md."""
     start = 0
     while True:
         idx = text.find(MACHINE_MARKER, start)
@@ -1701,15 +1189,7 @@ def _marker_offset(text):
 
 
 def _split_sections(text):
-    """File text -> (student_text, machine_text or None). The ONE split.
-
-    `student_text` is everything before the marker line, INCLUDING the newline
-    that ends the last student line: it is the exact prefix every machine writer
-    writes back unchanged, and the exact byte range the seal covers.
-    `machine_text` is everything after the marker line's own newline, or None when
-    the file carries no marker at all — i.e. an unassessed declaration, which is
-    `explore` view 2 and the only input `experiment` accepts.
-    """
+    """Split declaration vs machine section at the marker. Full strategy note: docs/triplestore.md."""
     idx = _marker_offset(text)
     if idx is None:
         return text, None
@@ -1720,24 +1200,7 @@ def _split_sections(text):
 
 
 def _declaration_digest(student_bytes):
-    """sha256 hex of the student section's bytes. The tamper seal of §3.1.
-
-    THE BYTE BOUNDARY, stated once so the three callers cannot disagree: the
-    digest covers `file_bytes[0 : start_of_the_marker_line]` — every byte of the
-    declaration INCLUDING the newline that terminates its last line, and NOT the
-    '#' that begins the marker. `_split_sections` returns exactly that prefix, so
-    the boundary is defined in one place and consumed everywhere.
-
-    Turtle is UTF-8 by specification and this file writes UTF-8, so the character
-    prefix `_split_sections` returns and the byte prefix on disk are the same
-    thing; callers pass `student_text.encode("utf-8")`.
-
-    WHY A SEAL AT ALL. Write-once (§3.1) is unenforceable without one: nothing
-    else can tell an assessed file whose declaration was edited afterwards from
-    one that was not, and such a file asserts verdicts for a treatment it no
-    longer declares — the most misleading artefact this project could produce,
-    because every number in it still looks perfectly plausible.
-    """
+    """SHA-256 seal of the declaration half. Full strategy note: docs/triplestore.md."""
     return hashlib.sha256(student_bytes).hexdigest()
 
 
@@ -1748,13 +1211,7 @@ def _read_text(path):
 
 
 def _verify_seal(g, exp, student_text, path):
-    """Raise unless `hw1:declarationDigest` still matches the student section.
-
-    Called FIRST by `read_experiment` and by `write_run`, before either looks at a
-    single value (§8.2). A file whose declaration changed after
-    assessment describes one treatment above the marker and reports another below
-    it, and no reader can tell which half to believe.
-    """
+    """Check the stored seal against the declaration; hard error on mismatch. Full strategy note: docs/triplestore.md."""
     stored = g.value(exp, HW1.declarationDigest)
     if stored is None:
         raise ValueError(
@@ -1795,13 +1252,7 @@ def _verify_seal(g, exp, student_text, path):
 #   is special-cased for results any more.
 # =============================================================================
 def _sole_experiment(g, path):
-    """The single hw1:Experiment subject of `g`. Zero or several is an error.
-
-    Not a guess, not "the first one". An experiment file with two Experiment
-    nodes means two different measurement passes were serialized into one graph,
-    and every downstream answer — which settings, which statuses, which run a
-    number belongs to — becomes a coin flip that nothing reports.
-    """
+    """Exactly one Experiment subject per file, else error. Full strategy note: docs/triplestore.md."""
     exps = sorted(set(g.subjects(RDF.type, HW1.Experiment)), key=str)
     if len(exps) != 1:
         raise ValueError(
@@ -1811,22 +1262,7 @@ def _sole_experiment(g, path):
 
 
 def _setting_value_to_python(lit, path, param_local):
-    """One hw1:settingValue literal -> float | int | str, typed by ITS DATATYPE.
-
-    The writer stamps the datatype declared by the parameter's `hw1:paramValueKind`
-    (§5) onto the literal, so the datatype ON the literal is a
-    faithful echo of the TBox declaration and reading it back needs no second trip
-    into the ontology. Coercing per datatype rather than sniffing the text is the
-    same rule `parse_setting_arg` obeys on the way in, and it matters in both
-    directions: an "integer" parameter must come back as an int and never a float,
-    and `icpBackend` must come back as the string "open3d" and never be guessed at.
-
-    rdflib treats a plain literal and an xsd:string-typed literal as UNEQUAL
-    (§5), which is why nothing here compares literals — every branch
-    converts. `float()` on an rdflib Literal parses its lexical form, so
-    "INF"^^xsd:double round-trips to `inf` and the fail-closed convention survives
-    a serialize/parse cycle.
-    """
+    """Setting literal -> python value by parameter kind. Full strategy note: docs/triplestore.md."""
     dt = lit.datatype
     if dt == XSD.integer:
         return int(lit)
@@ -1841,25 +1277,7 @@ def _setting_value_to_python(lit, path, param_local):
 
 
 def _experiment_settings(g, exp, path):
-    """{param_local: float|int|str} over every hw1:hasFactorSetting of `exp`.
-
-    Reads BOTH sections when handed the whole file's graph, which is the point: a
-    student's settings sit above the marker and the defaults `experiment` filled in
-    sit below it, and the recorded vector is their union (§4.2). Which
-    side a setting came from is recoverable from the split, not from this dict.
-
-    Keyed by the PARAMETER's local name, not by the setting node: parameter local
-    names are globally unique across factors (§2), which is why
-    `status_for` can look a threshold up by name — and why a student's settings may
-    be BLANK NODES (§2/§4.5) without anything downstream noticing. The factor a
-    setting points at is not in the key either; `hw1:settingForFactor` names the
-    primary factor only (§4.5) and readers traverse the TBox for the rest.
-
-    Two settings of the SAME parameter at DIFFERENT values is a hard error, not a
-    last-one-wins: `g.objects` has no defined order, so grading would silently
-    depend on rdflib's iteration order, and the file would state two levels of one
-    parameter while being, by construction, one treatment.
-    """
+    """Experiment's full setting vector (declared + defaulted). Full strategy note: docs/triplestore.md."""
     settings = {}
     for setting in g.objects(exp, HW1.hasFactorSetting):
         param = g.value(setting, HW1.settingParameter)
@@ -1883,15 +1301,7 @@ def _experiment_settings(g, exp, path):
 
 
 def _annotation_frame_index(g, ann, path):
-    """The integer frame index one hw1:FrameAnnotation is about.
-
-    `hw1:frameIndex` is carried redundantly by the annotation (§4.3)
-    precisely so a reader need not join back into the batch file, which
-    `read_experiment` does not open. When it is absent the frame IRI behind
-    `hw1:annotatesFrame` still carries the stem, and `frame_index_from_iri` is THE
-    tail parse (§8) — so the fallback re-uses that one implementation instead of
-    adding a second `split("/")`.
-    """
+    """Annotation node -> int frame stem. Full strategy note: docs/triplestore.md."""
     idx = g.value(ann, HW1.frameIndex)
     if idx is not None:
         return int(idx)
@@ -1918,66 +1328,110 @@ def _mask_factor_from_path(mask_file, path):
     return factor
 
 
+_USABLE_LINKS_QUERY = """\
+PREFIX hw1: <%s>
+SELECT ?pairIndex ?source ?target WHERE {
+  ?experiment hw1:producesPair ?pair .
+  ?pair hw1:pairIndex ?pairIndex ;
+        hw1:sourceFrame ?source ;
+        hw1:targetFrame ?target ;
+        hw1:qualificationStatus hw1:Pass .
+  FILTER NOT EXISTS {
+    ?experiment hw1:producesAnnotation ?sourceAnnotation .
+    ?sourceAnnotation hw1:annotatesFrame ?source ;
+                      hw1:qualificationStatus hw1:Fail .
+  }
+  FILTER NOT EXISTS {
+    ?experiment hw1:producesAnnotation ?targetAnnotation .
+    ?targetAnnotation hw1:annotatesFrame ?target ;
+                      hw1:qualificationStatus hw1:Fail .
+  }
+}
+ORDER BY ?pairIndex
+""" % NS
+
+
+def query_graph(graph, query_text):
+    """Run a read-only SPARQL query against a local graph. Full strategy note: docs/triplestore.md."""
+    try:
+        return graph.query(query_text)
+    except Exception as exc:
+        raise ValueError(f"invalid or unsupported SPARQL query: {exc}") from None
+
+
+def usable_links_from_query(graph, exp_iri):
+    """Usable-link set from a SPARQL result. Full strategy note: docs/triplestore.md."""
+    rows = query_graph(graph, _USABLE_LINKS_QUERY)
+    selected = []
+    for row in rows:
+        # The query can see multiple experiments if a caller gives it a combined
+        # graph. `read_experiment` supplies one, but keep this helper safe for
+        # other API consumers by verifying the pair belongs to this experiment.
+        pair = None
+        for candidate in graph.subjects(HW1.pairIndex, row.pairIndex):
+            if ((exp_iri, HW1.producesPair, candidate) in graph and
+                    graph.value(candidate, HW1.sourceFrame) == row.source and
+                    graph.value(candidate, HW1.targetFrame) == row.target):
+                pair = candidate
+                break
+        if pair is not None:
+            selected.append((int(row.pairIndex),
+                             (frame_index_from_iri(row.source),
+                              frame_index_from_iri(row.target))))
+    selected.sort(key=lambda value: value[0])
+    return [link for _, link in selected]
+
+
+def _read_semantic_experiment(g, exp, b, path):
+    """Read explicit Factor occurrences and expose the legacy policy adapter."""
+    # Keep completeness semantics in one shared validator. The adapter fields
+    # below remain for reconstruct.py compatibility, while the report is the
+    # authoritative closed-world diagnostic for new-schema readers.
+    from semantic_model import validate_experiment
+    completion = validate_experiment(g, exp, materialize=False)
+    frames = []
+    for f in g.objects(b, HW1.hasFrame):
+        idx = g.value(f, HW1.frameIndex)
+        rgb = g.value(f, HW1.hasRGBImage); dep = g.value(f, HW1.hasDepthImage)
+        if idx is None or rgb is None or dep is None:
+            raise ValueError(f"{path}: every Batch Frame needs frameIndex, RGBImage and DepthImage")
+        frames.append((int(idx), f, rgb, dep))
+    frames.sort(key=lambda x: x[0])
+    memberships = {x[2]: x[0] for x in frames} | {x[3]: x[0] for x in frames}
+    selected = sorted({_local(x) for x in g.objects(exp, HW1.evaluatesFactor)})
+    factors = list(g.subjects(HW1.inExperiment, exp))
+    seen = set(); frame_status = {idx: True for idx, *_ in frames}; pair_status = {}; masks = {}
+    for node in factors:
+        typ = g.value(node, HW1.hasDefinition)
+        if typ is None:
+            typ = g.value(node, HW1.factorType)
+        cur = g.value(node, HW1.hasCurrentFrame); prev = g.value(node, HW1.hasPrevious)
+        if typ is None or cur not in memberships or (prev is not None and prev not in memberships):
+            raise ValueError(f"{path}: Factor {node} has foreign or incomplete image links")
+        state = g.value(node, HW1.evaluationState)
+        if state == HW1.Measured and (g.value(node, HW1.value) is None or g.value(node, HW1.status) is None):
+            raise ValueError(f"{path}: measured Factor {node} must have exactly one value and status")
+        if prev is None:
+            idx = memberships[cur]; frame_status[idx] = frame_status[idx] and g.value(node, HW1.status) == HW1.Pass
+        else:
+            key = (memberships[prev], memberships[cur]); st = g.value(node, HW1.status)
+            pair_status[key] = pair_status.get(key, True) and st == HW1.Pass
+        for mf in g.objects(node, HW1.maskFile):
+            local = _local(typ); key = (memberships[prev], memberships[cur]) if prev is not None else memberships[cur]
+            masks.setdefault(local, {"frames": {}, "pairs": {}})["pairs" if prev is not None else "frames"][key] = str(mf)
+    ordered = sorted(pair_status)
+    usable = [(i, j) for i, j in ordered if pair_status[(i, j)] and frame_status.get(i, True) and frame_status.get(j, True)]
+    complete = completion.complete
+    return {"exp_iri": URIRef(str(exp)), "exp_name": _experiment_name_from_iri(exp, path),
+            "batch_name": _batch_name_from_batch_iri(b), "batch_iri": URIRef(str(b)),
+            "selected": selected, "settings": _experiment_settings(g, exp, path),
+            "frame_status": frame_status, "pair_status": pair_status,
+            "usable_links": usable, "mask_files": masks, "complete": complete,
+            "completion": completion.to_dict(), "graph": g}
+
+
 def read_experiment(path):
-    """Read an ASSESSED experiment .ttl into the dict of §8.2. THE ONE READER.
-
-    Returns
-
-        {"exp_iri":      URIRef,
-         "exp_name":     str,                     # the file stem == the IRI tail
-         "batch_name":   str,                     # from hw1:onBatch, not the path
-         "batch_iri":    URIRef,
-         "selected":     [factor_local, …],       # hw1:evaluatesFactor, sorted
-         "settings":     {param_local: float | int | str},   # the recorded vector
-         "frame_status": {frame_index: bool},     # DERIVED, see below
-         "pair_status":  {(i, j): bool},          # total: pairs are always minted
-         "usable_links": [(i, j), …],             # §4.5, ascending by hw1:pairIndex
-         "graph":        rdflib.Graph}            # the WHOLE file, both sections
-
-    THE SEAL IS VERIFIED FIRST, BEFORE ANY VALUE IS READ (§3.1/§8.2).
-    An experiment file is half hand-written; if its declaration changed after
-    assessment, every verdict below the marker was computed for a treatment the
-    file no longer declares, and there is no way to tell which half to believe.
-    That is a hard error here and in `write_run`, and the fix is always the same:
-    a new file (write-once).
-
-    `frame_status` IS DERIVED IN v3 (§4.5), while keeping v2's key
-    and shape so callers — `reconstruct.py` above all — need no change. A frame is
-    usable iff EVERY annotation of it is Pass, and VACUOUSLY usable when it has no
-    annotation at all: an experiment that selected only pair factors mints no
-    annotations, and a modality with no selected factor mints no node (§4.3), so
-    "absent" means "this experiment makes no claim", not "failed". v2's stored
-    `hw1:frameStatus` is deleted; the conjunction lives here, exactly as the
-    usable-link conjunction already did.
-
-    `usable_links` IS DERIVED HERE, AND ONLY HERE (§4.5). A link is
-    usable iff the pair's `hw1:qualificationStatus` is Pass — vacuously so when no
-    pair factor was selected — AND both of its endpoint frames are usable. That is
-    three nodes' worth of verdict, so leaving it to callers would mean every
-    caller re-deriving it, and the first one to write `qualificationStatus == Pass`
-    and forget the endpoints would select frames that failed their own factors.
-    It is deliberately NOT a stored predicate either: it spans three nodes, so a
-    cached copy goes stale the moment any of them is re-measured.
-
-    ORDER IS `hw1:pairIndex`, NEVER THE IRI. Stems are unpadded (§2), so
-    lexicographic order puts `pair/10_11` before `pair/9_10`. `pair_status` and
-    `usable_links` are both built in pairIndex order and Python dicts preserve
-    insertion order, so a caller may iterate either one and get capture order;
-    `frame_status` is built in ascending frame-index order for the same reason.
-
-    WHAT IS GONE. `exp_id` (§6: identity is the NAME now, and the key
-    is `exp_name`), and v1's `frames` / `knobs` keys before it (§11). A caller that
-    wants the selected frame set of a past run reads `hw1:usedFrame` off that run.
-
-    Raises ValueError on a file with no machine section (an unassessed
-    declaration), a broken seal, zero or several hw1:Experiment subjects, a
-    missing `hw1:onBatch`, a FactorSetting without a parameter or a value, or an
-    annotation or pair missing its `hw1:qualificationStatus` or its index. Every
-    one of those is a malformed file rather than a state: §4.3 makes the aggregate
-    total on every node it writes, so absence is a bug, and a bug that silently
-    reads as `Fail` would show up only as a smaller selection and a slightly worse
-    score.
-    """
+    """Canonical reader: declaration, settings, values+statuses, usable-link conjunction. Full strategy note: docs/triplestore.md."""
     text = _read_text(path)
     student_text, machine_text = _split_sections(text)
     if machine_text is None:
@@ -1999,6 +1453,9 @@ def read_experiment(path):
     b = g.value(exp, HW1.onBatch)
     if b is None:
         raise ValueError(f"{path}: experiment {exp} has no hw1:onBatch")
+
+    if _graph_uses_semantic_schema(g, exp):
+        return _read_semantic_experiment(g, exp, b, path)
 
     selected = sorted({_local(f) for f in g.objects(exp, HW1.evaluatesFactor)})
     settings = _experiment_settings(g, exp, path)
@@ -2062,9 +1519,10 @@ def read_experiment(path):
     usable_links = []
     for _, (i, j), ok in ordered:
         pair_status[(i, j)] = ok
-        # §4.5, the whole rule, once: pair Pass AND both endpoints usable.
-        if ok and frame_status[i] and frame_status[j]:
-            usable_links.append((i, j))
+    # §4.5's usable-link rule is a SPARQL query shared with reconstruct.py.
+    # Keep the validation and the derived status maps above: malformed input must
+    # still fail loudly instead of merely disappearing from a query result.
+    usable_links = usable_links_from_query(g, exp)
 
     return {"exp_iri": URIRef(str(exp)),
             "exp_name": _experiment_name_from_iri(exp, path),
@@ -2098,18 +1556,7 @@ _RUN_METADATA = {
 
 
 def _write_machine_section(path, student_text, machine_graph):
-    """Rewrite `path` as: student bytes, the marker line, the serialized machine graph.
-
-    THE STUDENT SECTION GOES BACK BYTE FOR BYTE (§3.1). `student_text`
-    is what `_split_sections` returned, so the prefix the seal was computed over is
-    the prefix written back, and the seal still verifies afterwards.
-
-    ATOMIC, via a sibling temp file and `os.replace`, because the half of this file
-    above the marker is HAND-WRITTEN and may be its author's only copy. Every other
-    .ttl this project writes is reproducible from a command line; this one is not,
-    so a crash between `open(..., "w")` and the last `write` must not be able to
-    eat somebody's declaration.
-    """
+    """Re-serialize only the machine half (declaration bytes preserved). Full strategy note: docs/triplestore.md."""
     body = machine_graph.serialize(format="turtle")
     if isinstance(body, bytes):                      # rdflib < 6 returned bytes
         body = body.decode("utf-8")
@@ -2123,81 +1570,7 @@ def _write_machine_section(path, student_text, machine_graph):
 
 def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
               metadata=None, mask_factor=None, diagnostic_file=None):
-    """Write one hw1:ReconstructionRun into an experiment file. THE ONE WRITER.
-
-    CONTRACT (§8.2)
-        In:     exp_path    — an ASSESSED experiment file (student declaration +
-                              marker + machine section). Only the machine section
-                              is rewritten.
-                mode        — "baseline" | "selected". Fixes the run IRI (§2) and the
-                              hw1:selectionMode individual (§4.4).
-                values      — {value_property_local: number}, e.g. {"mapMeanL2": 0.41}
-                              or {"coverageF": 0.62}. For each key the VALUE and its
-                              `…Status` are written, the status computed by
-                              `status_for` from the QualificationSettings recorded in
-                              THIS SAME FILE — which means both sections of it: the
-                              student's thresholds live above the marker.
-                used_frames — iterable of integer frame indices, "selected" only:
-                              one hw1:usedFrame triple each.
-                frame_count — how many frames the run consumed -> hw1:runFrameCount.
-                metadata    — optional statusless mechanism counts from
-                              `_RUN_METADATA`, e.g. {"gatedSteps": 3,
-                              "spliceCount": 2, "maxGapLength": 17}.
-        Out:    None. The machine section is rewritten; the declaration is not.
-
-    Called by `reconstruct.py`, by `completeness.py` and by any other evaluator.
-    Nobody else emits a run triple, which is what keeps "where did this number come
-    from" answerable from one function.
-
-    WHY THIS IS THE ONLY MUTATION AN ASSESSED FILE ACCEPTS (§3.1).
-    Experiments are write-once: `experiment` refuses a file that already carries the
-    marker, and every tuning is a brand-new declaration under a brand-new name. Runs
-    are the exception because they are the experiment's OUTCOME rather than its
-    design — reconstructing the same experiment twice must replace its numbers, not
-    fork the notebook. The seal is verified before any of that: a declaration edited
-    after assessment is a different experiment, and this function refuses to write
-    into it.
-
-    IDEMPOTENT PER (EXPERIMENT, MODE, KEY) — the single most important behaviour
-    here, unchanged from v2. The triples removed before writing are exactly the ones
-    about to be written: the value and status of each key in `values`, plus
-    hw1:usedFrame and hw1:runFrameCount when those arguments are supplied. Everything
-    else on the run node is left alone. That is what lets `completeness.py` add
-    `coverageF` to a run that already carries `mapMeanL2` without erasing it — the
-    two numbers come from two different programs and neither owns the node.
-
-    TOTAL ON EVERY CALL: `rdf:type`, `hw1:selectionMode` and the `hw1:hasRun`
-    back-link from the experiment (§4.4). A reader may therefore require all three
-    without OPTIONAL, while every value property is optional because of the
-    idempotency rule above. Re-adding them costs nothing — an rdflib Graph is a
-    set, so adding a triple that is already there is a no-op.
-
-    GRADE THE VALUE YOU STORE, NOT THE VALUE YOU COMPUTED (§4.5).
-    Every value goes through `_storable` BEFORE `status_for` sees it, because
-    rdflib re-derives every xsd:double at 7 significant digits and the status is a
-    denormalised cache of (value + settings): grading the unrounded number would
-    write `hw1:mapMeanL2 4e-01 ; hw1:mapMeanL2Status hw1:Fail` for a computed
-    0.4000000001 against a threshold of 0.4 — a record that contradicts itself, and
-    that a student re-grading the stored value gets the opposite answer from.
-
-    FAIL CLOSED. `inf` is written as-is, `"INF"^^xsd:double` (§4.6), and grades
-    `Fail` by the ordinary rule of §4.5 — no special case anywhere (`_storable`
-    passes non-finite values through untouched). `mean_l2` returns `inf` when the
-    ground truth is missing, so a run that could not be scored reads as FAILED
-    rather than as excellent. NaN likewise always Fails.
-
-    WHAT THE REWRITE NORMALISES, worth knowing before you diff a file: the machine
-    section is parsed, mutated and re-serialized, so ITS comments go and ITS
-    prefixes are reordered, and rdflib writes every xsd:double via "%e" at seven
-    significant digits (`0.41` -> `4.1e-01`). Deterministic, uniform across every
-    file this project writes — and applied to the machine half ONLY. Above the
-    marker not one byte moves.
-
-    Raises ValueError on an unknown `mode`, on `used_frames` with mode="baseline"
-    (hw1:usedFrame is a GoodSegments-only property, §4.4), on a file with no machine
-    section, on a broken seal, on a `values` key that no hw1:QualityFactor grades,
-    and — through `status_for` — on a missing threshold in the file's own settings.
-    """
+    """THE one writer of hw1:ReconstructionRun triples (S8.2), idempotent per key. Full strategy note: docs/triplestore.md."""
     if mode not in _SELECTION_MODE:
         raise ValueError(
             f"mode must be one of {sorted(_SELECTION_MODE)}, got {mode!r}; the mode is "
@@ -2240,7 +1613,15 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
     _verify_seal(full, exp, student_text, exp_path)
     expname = _experiment_name_from_iri(exp, exp_path)
     settings = _experiment_settings(full, exp, exp_path)
-    run = run_iri(expname, mode)
+    # Runs live in the experiment's own namespace tier: v5 (semantic) experiments
+    # mint under DATA_NS, legacy v4 ones under NS. Readers resolve runs through
+    # hw1:hasRun and accept both prefixes, so this branch changes nothing they see.
+    if _graph_uses_semantic_schema(full, exp):
+        run = data_run_iri(expname, mode)
+        legacy_run = run_iri(expname, mode)
+    else:
+        run = run_iri(expname, mode)
+        legacy_run = None
 
     # The status PROPERTY comes from the factor's hw1:statusProperty, never from
     # string concatenation. The naming rule (value + "Status") is frozen, but a
@@ -2291,7 +1672,8 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
                 f"{exp_path}: experiment {exp} has no hw1:onBatch, so the frame IRIs "
                 f"for hw1:usedFrame cannot be minted")
         name = _batch_name_from_batch_iri(b)
-        frames = [frame_iri(name, int(idx)) for idx in used_frames]
+        mint_frame = (data_frame_iri if legacy_run is not None else frame_iri)
+        frames = [mint_frame(name, int(idx)) for idx in used_frames]
 
     # Everything a run node consists of lives BELOW the marker, so the mutation
     # happens on the machine section alone and the declaration is never re-serialized.
@@ -2299,24 +1681,28 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
     g.parse(data=machine_text, format="turtle")
 
     # ── remove exactly what is about to be written, and nothing else ──────────
-    for value_p, status_p, _, _ in planned:
-        g.remove((run, value_p, None))
-        g.remove((run, status_p, None))
-    if frames is not None:
-        g.remove((run, HW1.usedFrame, None))
-    if frame_count is not None:
-        g.remove((run, HW1.runFrameCount, None))
-    if mask_factor is not None:
-        g.remove((run, HW1.maskFactor, None))
-    if diagnostic_file is not None:
-        g.remove((run, HW1.diagnosticFile, None))
-    for key in metadata:
-        g.remove((run, HW1[key], None))
-    # `mode` is mandatory, so the selection mode is always "supplied" (§8.2) and the
-    # removal is unconditional: a run node that somehow carried the OTHER mode would
-    # otherwise end up carrying both, and hw1:selectionMode is the one predicate a
-    # reader is allowed to assume is single-valued and present.
-    g.remove((run, HW1.selectionMode, None))
+    # On semantic experiments also clear a legacy-NS run node of the same mode:
+    # runs written before the DATA_NS migration would otherwise linger as a stale
+    # second node reachable through hw1:hasRun.
+    runs_to_clear = (run,) if legacy_run is None else (run, legacy_run)
+    for old_run in runs_to_clear:
+        for value_p, status_p, _, _ in planned:
+            g.remove((old_run, value_p, None))
+            g.remove((old_run, status_p, None))
+        if frames is not None:
+            g.remove((old_run, HW1.usedFrame, None))
+        if frame_count is not None:
+            g.remove((old_run, HW1.runFrameCount, None))
+        if mask_factor is not None:
+            g.remove((old_run, HW1.maskFactor, None))
+        if diagnostic_file is not None:
+            g.remove((old_run, HW1.diagnosticFile, None))
+        for key in metadata:
+            g.remove((old_run, HW1[key], None))
+        g.remove((old_run, HW1.selectionMode, None))
+        if old_run is not run:
+            g.remove((old_run, RDF.type, None))
+            g.remove((exp, HW1.hasRun, old_run))
 
     # ── write ─────────────────────────────────────────────────────────────────
     g.add((run, RDF.type, HW1.ReconstructionRun))
@@ -2344,13 +1730,7 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
 
 
 def write_pair_measurements(exp_path, factor_local, measurements):
-    """Write a deferred, pre-fit pair factor from the actual consumer loop.
-
-    ``measurements`` is an iterable of dictionaries with ``source``, ``target``,
-    ``value``, ``count`` and optional uint8 ``mask``.  This is intentionally a
-    separate writer from :func:`write_run`: pair evidence belongs on FramePair,
-    while trajectory outcomes belong on ReconstructionRun.
-    """
+    """Write back PriorWarpDepthResidual pair evidence below the marker. Full strategy note: docs/triplestore.md."""
     factors = load_quality_factors()
     if factor_local not in factors:
         raise ValueError(f"unknown QualityFactor {factor_local!r}")
@@ -2373,6 +1753,48 @@ def write_pair_measurements(exp_path, factor_local, measurements):
         raise ValueError(
             f"{exp_path}: cannot write {factor_local}; it was not selected")
     settings = _experiment_settings(full, exp, exp_path)
+
+    # Explicit-occurrence schema: update only returned canonical keys.  Absent
+    # evidence remains Pending, never an invented infinity/Measured result.
+    if _graph_uses_semantic_schema(full, exp):
+        machine = Graph(); machine.parse(data=machine_text, format="turtle")
+        factors = load_quality_factors(); by_pair = {
+            (int(m["source"]), int(m["target"])): dict(m) for m in measurements}
+        info = factors[factor_local]; over = info.get("over", factor_local)
+        names = {"HighFrequencyDepthResidual": "highFrequencyDepthResidual", "FlyingPixelRatio": "flyingPixelRatio",
+                 "ValidTileCoverage": "validTileCoverage", "IdentityMedianDepthChange": "identityMedianDepthChange",
+                 "JointValidDepthRatio": "jointValidDepthRatio", "PriorWarpDepthResidual": "priorWarpDepthResidual"}
+        over = names.get(factor_local, over)
+        image_index = {}
+        for frame in machine.objects(full.value(exp, HW1.onBatch), HW1.hasFrame):
+            idx = full.value(frame, HW1.frameIndex)
+            for image in (full.value(frame, HW1.hasDepthImage), full.value(frame, HW1.hasRGBImage)):
+                if idx is not None and image is not None: image_index[image] = int(idx)
+        written = 0
+        for node in list(machine.subjects(HW1.inExperiment, exp)):
+            node_def = machine.value(node, HW1.hasDefinition)
+            if node_def is None:
+                node_def = machine.value(node, HW1.factorType)
+            if _local(node_def) != factor_local:
+                continue
+            prev, cur = machine.value(node, HW1.hasPrevious), machine.value(node, HW1.hasCurrentFrame)
+            if prev is None or cur is None:
+                continue
+            if prev not in image_index or cur not in image_index:
+                raise ValueError(f"{exp_path}: deferred Factor {node} points outside Batch structure")
+            i, j = image_index[prev], image_index[cur]
+            m = by_pair.get((i, j)); machine.remove((node, HW1.value, None)); machine.remove((node, HW1.status, None)); machine.remove((node, HW1.evaluationState, None))
+            if m is None:
+                machine.add((node, HW1.evaluationState, HW1.Pending)); continue
+            value = _storable(float(m.get("value", float("nan"))))
+            machine.add((node, HW1.value, _double_literal(value))); machine.add((node, HW1.status, status_for(over, value, settings, factors))); machine.add((node, HW1.evaluationState, HW1.Measured)); written += 1
+            if "count" in m: machine.remove((node, HW1.supportCount, None)); machine.add((node, HW1.supportCount, Literal(int(m["count"]), datatype=XSD.integer)))
+        # Recompute completion from explicit state; preserve declaration bytes.
+        machine.remove((exp, RDF.type, HW1.FullEvaluatedFrames))
+        occurrences = list(machine.subjects(HW1.inExperiment, exp))
+        if occurrences and all(machine.value(n, HW1.evaluationState) == HW1.Measured for n in occurrences): machine.add((exp, RDF.type, HW1.FullEvaluatedFrames))
+        _write_machine_section(exp_path, student_text, machine)
+        return written
 
     by_pair = {(int(m["source"]), int(m["target"])): dict(m)
                for m in measurements}
@@ -2433,25 +1855,7 @@ def write_pair_measurements(exp_path, factor_local, measurements):
 # batch2ttl  — the STRUCTURE of one capture, and not one measured number
 # =============================================================================
 def _resolve_generation_settings(gen_args, decls):
-    """`--gen NAME=VALUE` list + TBox declarations -> {param_local: value}.
-
-    ONLY GenerationSetting parameters are accepted, and that is a hard error rather
-    than a tolerated confusion: `--gen tauHi=250` would record a MEASUREMENT number
-    on the Batch, where nothing reads it and where it would claim to describe the
-    pixels. The role decides the node (§4.2), so the role has to be
-    checked at the door.
-
-    NOTHING IS EVER DEFAULTED HERE (§5). A `brightnessGain = 1.0`
-    filled in from a default would assert that this code inspected the capture and
-    found it ungained — a claim nothing verified, about pixels this program never
-    opened. Absence means "not asserted", not "identity", and the TBox backs that by
-    declaring the two Generation parameters with no `hw1:paramDefault` at all. This
-    is the one place the completeness rule of §5 deliberately does not apply.
-
-    A repeated `--gen` is an error, not last-one-wins: whichever value this function
-    picked, the other one is in the shell history of somebody who believes it was
-    the treatment.
-    """
+    """Generation sidecar settings for a batch. Full strategy note: docs/triplestore.md."""
     given = {}
     for arg in gen_args or []:
         name, value = parse_setting_arg(arg, decls)
@@ -2475,73 +1879,7 @@ def _resolve_generation_settings(gen_args, decls):
 
 
 def build_batch_graph(data_dir, floor, generation=None, derived_from=None):
-    """Build the in-memory rdflib.Graph of one batch directory. STRUCTURE ONLY.
-
-    CONTRACT
-        In:     data_dir — a directory with rgb/ and depth/ subdirs (see
-                _pair_frames; only stems present in BOTH are frames of this batch).
-                A semantic/ subdir, if present, is tolerated but NOT ingested.
-                floor — the floor label, an int; see `batch_name`.
-                generation — {param_local: value} of GenerationSettings to record,
-                already resolved by `_resolve_generation_settings`. Recorded ONLY
-                when given (§5).
-                derived_from — the batchName of the capture this one was derived
-                from, or None; emits one `prov:wasDerivedFrom`.
-        Out:    (graph, name, batch_iri) where name = batch_name(data_dir, floor)
-                and batch_iri = batch_iri(name).
-
-        The graph must satisfy the TBox in ontology/hw1.ttl exactly. Put a node on
-        the wrong subject and a query's pattern simply will not match
-        (§4.1):
-
-            Batch       batchName (= name), batchPath, floor, hasFrame,
-                        hasGenerationSetting, prov:wasDerivedFrom
-            Frame       frameIndex, one per paired stem
-            RGBImage    schema:contentUrl,  linked by hasRGBImage
-            DepthImage  schema:contentUrl,  linked by hasDepthImage
-
-        `floor` and `frameIndex` are xsd:integer. Store the string properties as
-        PLAIN literals: in RDF 1.1 a plain literal IS an xsd:string, which is what
-        makes hw1:batchName "name" match under rdflib's strict in-memory matcher.
-
-    WHAT IS DELIBERATELY ABSENT
-        Every measured value, every threshold, every measurement parameter.
-
-        No `meanValue`, no `clipHiFraction`, no `validDepthFraction`, no
-        `depthRoughness`, no `medianDepthDifference`, no `depthEdgeOverlap`, and no
-        `tauHi` / `tauLo`: those are measurement, they depend on the setting vector,
-        and they belong to an EXPERIMENT file — the student's declaration, with its
-        machine section appended (§4.3). This function opens no PNG. It
-        runs in the time it takes to list two directories, and it is the reason a
-        second experiment at a second tau does not rewrite the batch.
-
-        NO FramePair NODES AND NO hw1:hasNextFrame — both deleted in v2
-        (§11). v1 wrote a FramePair skeleton per consecutive pair here
-        and let each experiment decorate it with observables. Under one graph that
-        is a collision: two experiments write two contradictory
-        `hw1:medianDepthDifference` triples onto one shared node. Pairs are minted
-        per experiment now (`pair_iri(expname, i, j)`) — a pair is two links and an
-        index, so the skeleton was never worth sharing. `hasNextFrame` went with
-        them: it was the successor chain the skeletons hung off, and ordering is
-        carried by `hw1:frameIndex` / `hw1:pairIndex`, which a reader sorts by as
-        integers instead of walking a property path.
-
-        NO TBox, and no flag to bundle one. `--no-ontology` is gone with the whole
-        three-graph layout: the TBox is `hw1/ontology/hw1.ttl` and every reader in
-        this project loads it from there (§3), so duplicating it into
-        every batch file would only create several copies to disagree with each
-        other.
-
-    STEM GAPS ARE STILL LOGGED, EVEN THOUGH THE PAIRS HAVE LEFT
-        The warning is about the FRAMES, not the pairs. If 42 is missing from
-        depth/ while 43 is present in both, then every experiment over this batch
-        will pair 41 with 43 — a real pair over a real two-step motion, whose
-        observables honestly report the larger displacement. That is the right
-        graph, but it is invisible unless somebody says so. A silently dropped
-        frame is the classic way an ICP gate sized for consecutive frames starts
-        failing on data nobody thinks changed, and `batch2ttl` is the first command
-        in the loop and therefore the right place to say it.
-    """
+    """Batch/file structural graph (frames, images, gaps warned). Full strategy note: docs/triplestore.md."""
     g = Graph()
     name = batch_name(data_dir, floor)
     b = batch_iri(name)
@@ -2626,21 +1964,7 @@ def _warn_stem_gaps(frames, prefix):
 
 
 def cmd_batch2ttl(args):
-    """DEPRECATED. Optional sidecar for generation provenance only.
-
-    `declare --data-dir` and `experiment` now read the capture directory
-    themselves. This command still writes `<data_dir>/batch.ttl` so a Generation
-    setting (`--gen NAME=VALUE`) or `prov:wasDerivedFrom` has somewhere to live
-    that is not an experiment file. Overwrites the file wholesale, which is safe
-    because it holds no measurement.
-
-    `--gen NAME=VALUE` records the corruption that is ALREADY BAKED into these
-    pixels, as a GenerationSetting on the Batch node (§4.2). Nothing
-    applies it; it is recorded so the treatment stays identifiable after the fact,
-    which is the whole reason `explore`'s verdict section can return the verdict
-    "regenerate the data" instead of sending a student to tune a threshold against
-    pixels that were broken before measurement started.
-    """
+    """Optional generation-provenance sidecar batch.ttl (deprecated as a required step). Full strategy note: docs/triplestore.md."""
     print("[batch2ttl] DEPRECATED: `declare` and `experiment` take the capture "
           "directory directly (`declare --data-dir <dir> --floor <n>`). This "
           "command is now only the optional writer of generation provenance into "
@@ -2684,11 +2008,7 @@ def cmd_batch2ttl(args):
 #   declaration.
 # =============================================================================
 def _factor_menu_comment(factors, decls):
-    """The §4.2 factor menu as Turtle comment lines, generated from the TBox.
-
-    Generated rather than pasted so the scaffold can never disagree with
-    `ontology/hw1.ttl` about names, polarities or threshold defaults.
-    """
+    """Factor menu comment block for declarations."""
     menu = _selectable_factors(factors)
     width = max(len(name) for name in menu)
     lines = []
@@ -2702,7 +2022,7 @@ def _factor_menu_comment(factors, decls):
 
 
 def _declare_capture_args(args):
-    """`--data-dir` (preferred) or deprecated `--batch-file` -> (dir, floor, path text)."""
+    """Capture args recorded in a declaration."""
     data_dir_arg = getattr(args, "data_dir", None)
     batch_file_arg = getattr(args, "batch_file", None)
     floor = int(getattr(args, "floor", 1) or 1)
@@ -2741,28 +2061,7 @@ def _declare_capture_args(args):
 
 
 def cmd_declare(args):
-    """Write a boilerplate declaration to hw1/experiments/<name>.ttl. Never assesses.
-
-    `--data-dir` is the capture directory (rgb/ + depth/). The scaffold writes
-    that path into `hw1:batchFile` and derives `hw1:onBatch` from `--floor` plus
-    the directory basename. `batch2ttl` is not a step.
-
-    The scaffold is complete enough for `explore` to preview immediately (all
-    selected factors, every setting `WILL BE DEFAULTED`), and the file is
-    validated through `read_declaration` before this command reports success, so
-    a generated declaration can never be one of the malformed ones §8.1 rejects.
-
-    What stays the STUDENT'S JOB, by design: the PREDICTION block (a TODO until
-    replaced), the rdfs:label, trimming the factor selection to the hypothesis,
-    and any hw1:FactorSetting override — the command scaffolds the syntax as
-    comments and sets nothing itself, because a generated setting would record a
-    treatment nobody chose.
-
-    Refuses to overwrite: an existing file under the same name is a hard error,
-    assessed or not, because `hw1/experiments/` is an append-only lab notebook
-    (§3.1) and a fresh scaffold over a hand-edited declaration would
-    delete design work.
-    """
+    """Scaffold a student declaration Turtle (never assesses, never overwrites). Full strategy note: docs/triplestore.md."""
     name = args.name
     if not _EXPNAME_RE.match(name):
         raise SystemExit(
@@ -2791,7 +2090,7 @@ def cmd_declare(args):
         raise SystemExit(f"[declare] {exc}")
     _warn_stem_gaps(frames, prefix="[declare]")
     name_of_batch = batch_name(data_dir, floor)
-    batch = batch_iri(name_of_batch)
+    batch = data_batch_iri(name_of_batch)
 
     decls = load_parameter_declarations(_ONTOLOGY_TTL)
     factors = load_quality_factors(_ONTOLOGY_TTL)
@@ -2830,14 +2129,17 @@ def cmd_declare(args):
         "# =============================================================================",
         "",
         "@prefix hw1:  <http://taica.course/hw1/ontology#> .",
+        f"@prefix batch: <{DATA_NS}batch/> .",
+        f"@prefix exp:   <{DATA_NS}experiment/> .",
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
         "@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .",
         "",
-        f"<{NS}experiment/{name}>",
+        f"exp:{name}",
         "    a hw1:Experiment ;",
+        "    hw1:schemaVersion \"5.0.0\" ;",
         f"    rdfs:label \"TODO: one line naming the condition this experiment tests\"@en ;",
         f"    hw1:batchFile \"{batch_file_text}\" ;",
-        f"    hw1:onBatch <{batch}> ;   # {name_of_batch}",
+        f"    hw1:onBatch batch:{name_of_batch} ;   # {name_of_batch}",
         "    hw1:evaluatesFactor",
         f"        {selection_text} .",
         "",
@@ -2999,7 +2301,7 @@ _PAIR_OBSERVABLES = {
 # they wanted next to the data that disagrees with it, and nothing downstream
 # could tell that apart from a measurement.
 _DECLARATION_EXPERIMENT_PREDICATES = (
-    RDF.type, RDFS.label, HW1.batchFile, HW1.onBatch, HW1.evaluatesFactor,
+    RDF.type, RDFS.label, HW1.schemaVersion, HW1.batchFile, HW1.onBatch, HW1.evaluatesFactor,
     HW1.hasFactorSetting)
 _DECLARATION_SETTING_PREDICATES = (
     RDF.type, HW1.settingParameter, HW1.settingRole, HW1.settingForFactor,
@@ -3023,63 +2325,28 @@ def _fmt_triple(s, p, o):
 
 
 def _selectable_factors(factors):
-    """{factor_local: value_property_local} — THE MENU of §4.2.
-
-    Derived from the placement tables rather than listed: a QualityFactor is
-    selectable iff this file knows where its observable goes and what measures it.
-    The run-level factors are separately identified by their run observables.
-    """
+    """The 1..8 selectable input factors."""
     placed = set(_FRAME_OBSERVABLES) | set(_PAIR_OBSERVABLES)
     return {name: info["over"] for name, info in factors.items()
             if info["over"] in placed}
 
 
 def _run_level_factors(factors):
-    """{factor_local: value_property_local} — the NOT-selectable factors (§4.2)."""
+    """Non-selectable always-on run factors."""
     run_observables = {"mapMeanL2", "coverageF"}
     return {name: info["over"] for name, info in factors.items()
             if info["over"] in run_observables}
 
 
 def _run_factor_parameters(decls, factors):
-    """The parameters every experiment records whatever it selects (§4.2).
-
-    `icpBackend`, `maxMapMeanL2`, `minCoverageF` — derived, not listed: they are
-    the Measurement and Qualification parameters whose primary factor is a
-    run-level factor. They are required unconditionally because the run factors
-    are evaluated unconditionally: `reconstruct.py` reads `icpBackend` out of the
-    file, and `write_run` grades `mapMeanL2` and `coverageF` against the other
-    two, so an experiment missing any of them cannot be reconstructed at all.
-
-    There were four until 2026-07-31, when `minSegmentLength` was deleted from
-    the TBox: nothing is listed here by name, so this function needed no edit —
-    the set follows the ontology, which is the point of deriving it.
-    """
+    """Run-factor parameters (icpBackend, maxMapMeanL2, ...). Full strategy note: docs/triplestore.md."""
     run_factors = set(_run_level_factors(factors))
     return sorted(name for name, d in decls.items()
                   if d["role"] in _EXPERIMENT_ROLES and d["primary"] in run_factors)
 
 
 def _required_parameters(selected, decls, factors):
-    """The REQUIRED PARAMETER SET of §4.2 (v3, selection-scoped). -> set.
-
-    For every SELECTED factor: its `hw1:qualifiedBy` parameter (the threshold that
-    turns its value into a verdict) plus every Measurement parameter whose primary
-    OR affected factor is selected (the numbers that decided what the value even
-    is). Plus the three run-factor parameters, always.
-
-    WHY THE VECTOR IS TOTAL OVER THE SELECTION AND NOT OVER EVERYTHING (the v2
-    rule this replaces). A recorded setting is a claim that this level was applied
-    to this measurement. An experiment evaluating only depth factors that recorded
-    `tauHi = 250` would be claiming a highlight threshold nothing read — as false
-    as a defaulted Generation setting, and for the same reason. Totality still
-    matters where it buys something: within the selection every threshold
-    `status_for` needs is present, so a missing one is a bug rather than a state.
-
-    GENERATION PARAMETERS ARE NEVER IN THIS SET. They live on the Batch, they
-    describe the pixels, and absence means "not asserted" rather than "identity"
-    (§5) — nothing may default a claim about pixels this program never produced.
-    """
+    """Selection-scoped required parameter set (S4.2 completeness). Full strategy note: docs/triplestore.md."""
     required = set(_run_factor_parameters(decls, factors))
     for factor in selected:
         required.add(factors[factor]["qualifiedBy"])
@@ -3092,14 +2359,7 @@ def _required_parameters(selected, decls, factors):
 
 
 def _resolve_batch_file(batch_file):
-    """`hw1:batchFile` -> an absolute path. Relative paths resolve against the CWD.
-
-    Frozen in §4.2: "resolved against the current working directory
-    when relative". Not against the declaration's own directory, which would be
-    the other defensible rule — the declarations live in `hw1/experiments/` and
-    the captures in `eval/`, so a CWD-relative path is the one a student can copy
-    out of the `declare --data-dir` command they just ran at the repo root.
-    """
+    """Resolve hw1:batchFile to a readable capture. Full strategy note: docs/triplestore.md."""
     return batch_file if os.path.isabs(batch_file) else os.path.abspath(batch_file)
 
 
@@ -3114,7 +2374,7 @@ _FLOOR_BATCH_NAME_RE = re.compile(r"^floor(\d+)_(.+)$")
 
 
 def _floor_from_batch_name(name):
-    """`floor1_baseline` -> 1. The name is floor-qualified by `batch_name`."""
+    """Floor number from a floor-qualified batch name."""
     match = _FLOOR_BATCH_NAME_RE.match(name)
     if not match:
         raise ValueError(
@@ -3156,15 +2416,7 @@ def _parse_batch_ttl(path):
 
 
 def _capture_dir(batch_path, batch_file):
-    """The directory the PIXELS are in, given a (possibly stale) hw1:batchPath.
-
-    Used for the deprecated `hw1:batchFile` -> batch.ttl hop: `batchPath` is
-    whatever string was passed to `batch2ttl --data-dir`, resolved against the
-    CWD; when that fails, the directory CONTAINING batch.ttl is tried, because
-    that file lives inside the capture directory. Both misses are a hard error
-    naming both candidates — measuring the wrong directory is the failure this
-    whole resolution chain exists to prevent.
-    """
+    """Capture dir for a batch name. Full strategy note: docs/triplestore.md."""
     candidates = [os.path.abspath(batch_path),
                   os.path.dirname(_resolve_batch_file(batch_file))]
     for candidate in candidates:
@@ -3178,22 +2430,12 @@ def _capture_dir(batch_path, batch_file):
         f"the capture directory itself.")
 
 
-def _resolve_declared_capture(batch_file, on_batch, path, exp, bf):
-    """hw1:batchFile + hw1:onBatch -> (data_dir, batch_iri, batch_name).
-
-    Preferred: `hw1:batchFile` names the capture directory (rgb/ + depth/).
-    `hw1:onBatch` must equal `batch_iri(batch_name(data_dir, floor))`, with
-    `floor` parsed from the onBatch name — that is the 'measured capture A,
-    wrote into capture B' check, without a batch.ttl in the middle.
-
-    Deprecated: `hw1:batchFile` names a batch.ttl. The capture is that file's
-    `hw1:batchPath` (dirname-of-the-ttl fallback), and `hw1:onBatch` must equal
-    the Batch IRI inside the file.
-    """
+def _resolve_declared_capture(batch_file, on_batch, path, exp, bf, *, semantic=False):
+    """Resolve the declaration's capture to a data dir. Full strategy note: docs/triplestore.md."""
     resolved = _resolve_batch_file(batch_file)
     if _is_capture_dir(resolved):
         if on_batch is None:
-            expected = batch_iri(batch_name(resolved, 1))
+            expected = data_batch_iri(batch_name(resolved, 1)) if semantic else batch_iri(batch_name(resolved, 1))
             raise ValueError(
                 f"{path}: the experiment declares no hw1:onBatch. State the batch "
                 f"IRI of the capture at {batch_file!r} — it is checked against the "
@@ -3207,10 +2449,10 @@ def _resolve_declared_capture(batch_file, on_batch, path, exp, bf):
             raise ValueError(
                 f"{path}: hw1:onBatch names {_fmt_term(on_batch)}, which is not "
                 f"a floor-qualified batch IRI of this assignment "
-                f"(expected {NS}batch/floor<N>_<capture-dir-basename>). {exc} "
+                f"(expected {DATA_NS}batch/floor<N>_<capture-dir-basename>). {exc} "
                 f"Offending triple:\n    {_fmt_triple(exp, HW1.onBatch, on_batch)}")
         expected_name = batch_name(resolved, floor)
-        expected_iri = batch_iri(expected_name)
+        expected_iri = data_batch_iri(expected_name) if semantic else batch_iri(expected_name)
         if URIRef(str(on_batch)) != expected_iri:
             raise ValueError(
                 f"{path}: hw1:onBatch names {_fmt_term(on_batch)} but the capture "
@@ -3248,25 +2490,7 @@ def _resolve_declared_capture(batch_file, on_batch, path, exp, bf):
 
 
 def _declaration_setting_value(node, param_local, decl, lit, path):
-    """One student `hw1:settingValue` literal -> float | int | str, typed per §4.2.
-
-    The declared `hw1:paramValueKind` decides, never the Python type and never the
-    text: a "double" parameter yields a float, an "integer" parameter an int, a
-    "string" parameter the text verbatim — the same rule `parse_setting_arg`
-    applies to `--gen`, and the reason `icpBackend` is an ordinary parameter
-    rather than a special case.
-
-    WHAT IS ACCEPTED, AND WHY IT IS NOT "EXACTLY THE DECLARED DATATYPE". Turtle's
-    native forms are `0.03` (xsd:decimal), `20` (xsd:integer), `1.0e0`
-    (xsd:double) and `"open3d"` (xsd:string), so demanding `"0.03"^^xsd:double`
-    and nothing else would reject the spelling most students write first while
-    changing no meaning at all. So: a "double" accepts any numeric literal, an
-    "integer" accepts an INTEGER literal only (a count has no honest fractional
-    reading — the same strictness `parse_setting_arg` applies on the CLI side),
-    and a "string" accepts a string literal. A literal
-    of the wrong FAMILY — a string for a double, a fraction for a count — is an
-    error naming the triple, because that one does change the meaning.
-    """
+    """One declared setting value, parsed by kind. Full strategy note: docs/triplestore.md."""
     kind = decl["kind"]
     dt = lit.datatype
     triple = _fmt_triple(node, HW1.settingValue, lit)
@@ -3296,52 +2520,7 @@ def _declaration_setting_value(node, param_local, decl, lit, path):
 
 
 def read_declaration(path):
-    """Validate the STUDENT SECTION of a declaration. §8.1. Never writes.
-
-    Returns
-
-        {"exp_iri":     URIRef,
-         "exp_name":    str,                    # == the file stem == the IRI tail
-         "batch_file":  str,                    # as declared (capture dir, or legacy ttl)
-         "batch_iri":   URIRef,
-         "batch_name":  str,
-         "batch_path":  str,                    # resolved capture directory
-         "selected":    [factor_local, …],      # ≥ 1, menu factors only, sorted
-         "given":       {param_local: value},   # student-given settings
-         "required":    {param_local: value}}   # given ∪ defaults, §4.2's rule
-
-    Reads ONLY what is above the marker, so it answers the same question for an
-    unassessed declaration (`explore` view 2) and for an assessed experiment
-    (`explore` view 3's given-vs-defaulted split). `experiment` calls it too;
-    NEITHER re-implements a rule, which is the point of it being one function.
-
-    EVERY §4.2 RULE, AND EVERY VIOLATION NAMES THE OFFENDING TRIPLE:
-
-      * exactly one `hw1:Experiment` subject;
-      * its IRI tail equals the file stem and matches [A-Za-z0-9_-]+ (§2) — a
-        mismatch is an error rather than a choice, because picking either one
-        would silently rename the student's experiment;
-      * `hw1:batchFile` resolves (against the CWD) to a capture directory
-        (rgb/ + depth/) whose `batch_name(dir, floor)` IRI equals the declared
-        `hw1:onBatch` — the "measured capture A, wrote into capture B" bug,
-        caught at declaration time instead of never. A legacy path to a
-        batch.ttl is still accepted and checked the same way against that file;
-      * `hw1:evaluatesFactor` is non-empty and names menu factors only; a
-        run-level factor there is an error, because selection scopes INPUT quality
-        and the run factors are evaluated unconditionally;
-      * each FactorSetting names a TBox-declared parameter, agrees with its
-        `hw1:paramRole` and its `hw1:paramPrimaryFactor`, carries a value typed by
-        its `hw1:paramValueKind`, and TOUCHES THE SELECTION — a setting for a
-        parameter no selected factor is primary or affected by, and which is not a
-        run-factor parameter, records a level that changed nothing;
-      * the WHITELIST: nothing outside the Experiment and FactorSetting predicates
-        above, because verdicts are computed, never declared.
-
-    STUDENT SETTINGS MAY BE BLANK NODES (§2/§4.5), which is why nothing here mints
-    or re-opens them and why the machine section never touches them: it records
-    its own defaults under the §2 scheme IRIs and lets the marker split say which
-    is which.
-    """
+    """Validate a student declaration: batch, selection, settings, prediction TODOs. Full strategy note: docs/triplestore.md."""
     text = _read_text(path)
     student_text, _machine_text = _split_sections(text)
 
@@ -3409,8 +2588,10 @@ def read_declaration(path):
             f"the current working directory when relative)")
     batch_file = str(bf)
     on_batch = g.value(exp, HW1.onBatch)
+    schema_version = str(g.value(exp, HW1.schemaVersion) or "4.0.0")
     data_dir, batch, batch_name_str = _resolve_declared_capture(
-        batch_file, on_batch, path, exp, bf)
+        batch_file, on_batch, path, exp, bf,
+        semantic=schema_version.startswith("5"))
 
     # ── the selection ─────────────────────────────────────────────────────────
     selected_terms = list(g.objects(exp, HW1.evaluatesFactor))
@@ -3543,6 +2724,7 @@ def read_declaration(path):
 
     return {"exp_iri": URIRef(str(exp)),
             "exp_name": exp_name,
+            "schema_version": schema_version,
             "batch_file": batch_file,
             "batch_iri": URIRef(str(batch)),
             "batch_name": batch_name_str,
@@ -3553,15 +2735,7 @@ def read_declaration(path):
 
 
 def _require_settings(settings, names, what):
-    """Fail loudly if a parameter a measurer needs is absent from the setting vector.
-
-    Reachable only when the required-parameter rule of §4.2 and the measurement
-    tables above disagree — a TBox that dropped a `hw1:paramAffectsFactor` link, or
-    a table row whose `params` name a parameter no factor points at. The message
-    points at the ontology rather than at the declaration, because an experiment
-    cannot silently measure `clipHiFraction` at "whatever tau_hi happened to be":
-    there is no such quantity.
-    """
+    """Complete the required setting set with recorded defaults. Full strategy note: docs/triplestore.md."""
     missing = [n for n in names if n not in settings]
     if missing:
         raise ValueError(
@@ -3572,14 +2746,7 @@ def _require_settings(settings, names, what):
 
 
 def _status_property(value_local, factors):
-    """The `hw1:…Status` property of the factor declared over `value_local`.
-
-    READ from the factor's `hw1:statusProperty`, never built by appending "Status"
-    to the value property's name. The naming rule happens to be mechanical, and
-    that is exactly why the concatenation must not be coded: a factor whose status
-    property is named any other way would silently stop being written, and the
-    symptom would be "that factor always passes" (§4.5).
-    """
+    """Status predicate for an observable property. Full strategy note: docs/triplestore.md."""
     for info in factors.values():
         if info["over"] == value_local:
             return HW1[info["status"]]
@@ -3589,21 +2756,7 @@ def _status_property(value_local, factors):
 
 
 def _write_observable(g, node, value_local, value, settings, factors):
-    """Write one observable's VALUE and its baked STATUS onto `node`. -> True iff Pass.
-
-    The two triples are written together, here, and nowhere else — which is what
-    makes the totality promise of §4.3 mechanical rather than a habit:
-    a fail-closed measurer's `inf` or `0.0` goes in exactly like any other number
-    and grades itself through `status_for`. There is no path through this function
-    that writes a value without a status, and none that writes a status without the
-    value that justifies it.
-
-    THE GRADED NUMBER IS THE STORED NUMBER. `_storable` is applied BEFORE the
-    comparison, not only before the write, so the verdict is reproducible from the
-    file: re-grade what the .ttl holds and you get back the status the .ttl holds.
-    Grading the un-rounded value instead would produce `2e-01 … hw1:Fail` against a
-    threshold of 0.2 — see `_storable` for why that is not hypothetical.
-    """
+    """Write one value + baked status triple pair. Full strategy note: docs/triplestore.md."""
     stored = _storable(value)
     g.add((node, HW1[value_local], _double_literal(stored)))
     status = status_for(value_local, stored, settings, factors)
@@ -3612,19 +2765,7 @@ def _write_observable(g, node, value_local, value, settings, factors):
 
 
 def _fail_closed_value(value_local, factors):
-    """The value to store when a measurer RAISES: the one that fails every threshold.
-
-    §4.3: "A measurer that fails writes its fail-closed value, never
-    nothing." The measurers implement that themselves for the failures they can
-    see (`inf` for a lower-is-better factor, `0.0` for a higher-is-better one, §9);
-    this is the outer guard for the ones they cannot — an unreadable PNG, a raster
-    of the wrong dtype. It reads the direction off the TBox and returns the
-    infinity on the failing side, so the guard cannot accidentally be more generous
-    than a threshold somebody happened to set to 0.0.
-
-    `hw1:meanValue` has no factor and no status, so its fallback is NaN: a value
-    that is visibly not a measurement, next to no verdict at all.
-    """
+    """Fail-closed scalar for a failed measurement (inf or 0.0 by polarity). Full strategy note: docs/triplestore.md."""
     for info in factors.values():
         if info["over"] == value_local:
             return float("-inf") if info["polarity"] == "higher" else float("inf")
@@ -3632,14 +2773,7 @@ def _fail_closed_value(value_local, factors):
 
 
 def _measured(value_local, factors, where, measure, *args):
-    """Call one measurer; on an exception store the fail-closed value and say so.
-
-    Never swallows the failure quietly: the WARNING names the node, the observable
-    and the exception on stderr, and the file records a value that FAILS. The
-    alternative — letting the exception out — would throw away a whole measuring
-    pass over one unreadable frame, and the alternative to that — writing nothing —
-    would leave a hole that reads as "no problem here" in every table.
-    """
+    """Run one frame measurer, fail-closed. Full strategy note: docs/triplestore.md."""
     try:
         return measure(*args)
     except Exception as exc:                             # noqa: BLE001 — deliberate
@@ -3652,7 +2786,7 @@ def _measured(value_local, factors, where, measure, *args):
 
 
 def _measured_with_mask(value_local, factors, where, measure, *args):
-    """Measure a scalar and its already-derived drop mask as one atomic result."""
+    """Run one depth measurer with its drop mask, fail-closed. Full strategy note: docs/triplestore.md."""
     try:
         result = measure(*args)
         if not isinstance(result, tuple) or len(result) not in (2, 3):
@@ -3680,7 +2814,7 @@ def _factor_for_observable(value_local, factors):
 
 
 def _write_mask_artifact(mask, mask_root, relative_to, factor_local, filename):
-    """Write one 0/255 PNG and return its portable experiment-relative path."""
+    """Persist one drop-mask PNG artifact. Full strategy note: docs/triplestore.md."""
     if mask_root is None or mask is None:
         return None
     factor_dir = os.path.join(mask_root, "masks", factor_local)
@@ -3692,33 +2826,7 @@ def _write_mask_artifact(mask, mask_root, relative_to, factor_local, filename):
 
 
 def _check_batch_file(batch_ttl, name, expected_frames):
-    """Cross-check the declared batch.ttl against the frames about to be measured.
-
-    WHY THE IRIs ARE RE-DERIVED AND NOT READ OUT OF THE BATCH FILE
-        `experiment` builds its subject IRIs the way `batch2ttl` did — from
-        `_pair_frames(data_dir)` and the helpers of the IRI section — rather than
-        by parsing batch.ttl for frame nodes. Deriving them twice from the same
-        rule is not duplication: the rule lives in ONE place (`frame_iri`,
-        `component_iri`) and both commands call it. Reading them out of the file
-        instead would quietly measure whatever set of frames the last `batch2ttl`
-        saw rather than the frames on disk.
-
-    SO WHY LOOK AT THE FILE AT ALL
-        Because IRI identity between the two files is the ONLY join there is
-        (§2), and nothing in RDF enforces it. If batch.ttl is stale —
-        a frame added to `rgb/` since, a `--floor` typo, a directory renamed — the
-        experiment ends up full of annotations whose `hw1:annotatesFrame` points at
-        subjects no batch file declares. Every table then joins to nothing and
-        shows ZERO ROWS against two perfectly well-formed files. That failure is
-        invisible, and it is worth one Turtle parse to make it impossible.
-
-        The check runs BEFORE any pixel is read, so a mismatch costs a second
-        rather than a full measuring pass.
-
-    PAIRS ARE NOT CHECKED, because batch.ttl declares none (§4.1):
-    the experiment mints its own pairs under its own IRIs, so there is nothing to
-    be stale about. Frames are shared structure, and they are the whole join.
-    """
+    """Validate hw1:batchFile against the capture dir. Full strategy note: docs/triplestore.md."""
     g = Graph()
     g.parse(batch_ttl, format="turtle")
     declared_names = sorted({str(o) for o in g.objects(None, HW1.batchName)})
@@ -3748,64 +2856,121 @@ def _check_batch_file(batch_ttl, name, expected_frames):
             f"--data-dir <dir> --floor <n>`.")
 
 
+def _semantic_schema_enabled(path=_ONTOLOGY_TTL):
+    """Return whether the installed TBox advertises explicit Factor occurrences."""
+    try:
+        ontology = Graph()
+        ontology.parse(path, format="turtle")
+        return ((HW1.Factor, RDF.type, RDFS.Class) in ontology or
+                any(ontology.triples((None, RDFS.subClassOf, HW1.Factor))))
+    except Exception:
+        return False
+
+
+def _graph_uses_semantic_schema(graph, experiment):
+    """Opt into the Factor model per artifact, while retaining legacy reads."""
+    version = graph.value(experiment, HW1.schemaVersion)
+    if version is not None:
+        try:
+            return int(str(version).split('.', 1)[0]) >= 5
+        except (TypeError, ValueError):
+            return False
+    return any(graph.subjects(HW1.inExperiment, experiment))
+
+
+def _semantic_factor_info(factors, factor_local):
+    info = factors.get(factor_local, {})
+    over = info.get("over", factor_local)
+    return over, info
+
+
+def _bind_readable_namespaces(g, batch_name_str, expname):
+    """Bind short Turtle prefixes so output stays readable."""
+    g.bind("hw1", HW1); g.bind("schema", SCHEMA); g.bind("xsd", XSD)
+    g.bind("batch", Namespace(f"{DATA_NS}batch/"))
+    g.bind("frame", Namespace(f"{DATA_NS}batch/{batch_name_str}/frame/"))
+    g.bind("rgb", Namespace(f"{DATA_NS}batch/{batch_name_str}/rgb/"))
+    g.bind("depth", Namespace(f"{DATA_NS}batch/{batch_name_str}/depth/"))
+    g.bind("exp", Namespace(f"{DATA_NS}experiment/"))
+    g.bind("factor", Namespace(f"{DATA_NS}experiment/{expname}/factor/"))
+    g.bind("setting", Namespace(f"{DATA_NS}experiment/{expname}/setting/"))
+    g.bind("run", Namespace(f"{DATA_NS}experiment/{expname}/run/"))
+
+
+def _build_semantic_machine_graph(decl, data_dir, digest, decls, factors,
+                                  artifact_root=None, artifact_relative_to=None):
+    """Semantic (v5 DATA_NS) machine graph builder. Full strategy note: docs/triplestore.md."""
+    exp, expname = decl["exp_iri"], decl["exp_name"]
+    name, settings, selected = decl["batch_name"], decl["required"], decl["selected"]
+    frames = _pair_frames(data_dir); g = Graph()
+    _bind_readable_namespaces(g, name, expname)
+    b = data_batch_iri(name)
+    g.add((exp, HW1.declarationDigest, Literal(digest))); g.add((exp, HW1.onBatch, b))
+    g.add((b, RDF.type, HW1.Batch)); g.add((b, HW1.batchName, Literal(name)))
+    g.add((b, HW1.batchPath, Literal(data_dir)))
+    for stem, rgb_path, depth_path in frames:
+        f = data_frame_iri(name, stem); rgb = data_component_iri(name, stem, "rgb"); dep = data_component_iri(name, stem, "depth")
+        g.add((b, HW1.hasFrame, f)); g.add((f, RDF.type, HW1.Frame)); g.add((f, HW1.frameIndex, Literal(int(stem), datatype=XSD.integer)))
+        g.add((f, HW1.hasRGBImage, rgb)); g.add((rgb, RDF.type, HW1.RGBImage)); g.add((rgb, SCHEMA.contentUrl, Literal(rgb_path)))
+        g.add((f, HW1.hasDepthImage, dep)); g.add((dep, RDF.type, HW1.DepthImage)); g.add((dep, SCHEMA.contentUrl, Literal(depth_path)))
+    for param in sorted(set(settings) - set(decl["given"])):
+        d = decls[param]; s = data_setting_iri(expname, d["primary"], param)
+        for triple in ((exp, HW1.hasFactorSetting, s), (s, RDF.type, HW1.FactorSetting), (s, HW1.settingParameter, d["iri"]),
+                       (s, HW1.settingRole, HW1[d["role"]]), (s, HW1.settingForFactor, d["primaryIri"])): g.add(triple)
+        g.add((s, HW1.settingValue, _setting_value_literal(settings[param], d["kind"])))
+    count = 0; measured = 0
+    for factor_local in selected:
+        over, _ = _semantic_factor_info(factors, factor_local)
+        if over in _FRAME_OBSERVABLES:
+            spec = _FRAME_OBSERVABLES[over]
+            for stem, rgb_path, depth_path in frames:
+                node = data_factor_iri(expname, factor_local, stem); image = data_component_iri(name, stem, spec["modality"])
+                g.add((node, RDF.type, HW1.Factor)); g.add((node, RDF.type, HW1.SingleImageFactor)); g.add((node, HW1.inExperiment, exp)); g.add((node, HW1.hasDefinition, HW1[factor_local])); g.add((node, HW1.hasCurrentFrame, image))
+                # targetKind/evaluationPhase describe the reusable FactorDefinition
+                # in the TBox; the occurrence carries only its
+                # hasDefinition link and measured result.
+                if "measure_mask" in spec:
+                    value, mask, _count = _measured_with_mask(over, factors, f"frame {stem}", spec["measure_mask"], rgb_path, depth_path, settings)
+                else:
+                    value, mask = _measured(over, factors, f"frame {stem}", spec["measure"], rgb_path, depth_path, settings), None
+                g.add((node, HW1.value, _double_literal(value))); g.add((node, HW1.status, status_for(over, _storable(value), settings, factors))); g.add((node, HW1.evaluationState, HW1.Measured)); measured += 1; count += 1
+                if mask is not None:
+                    mf = _write_mask_artifact(mask, artifact_root, artifact_relative_to, factor_local, f"{stem}.png")
+                    if mf: g.add((node, HW1.maskFile, Literal(mf)))
+        elif over in _PAIR_OBSERVABLES:
+            spec = _PAIR_OBSERVABLES[over]
+            for (s0, _, d0), (s1, _, d1) in zip(frames, frames[1:]):
+                i, j = int(s0), int(s1); node = data_factor_iri(expname, factor_local, j, i)
+                g.add((node, RDF.type, HW1.Factor)); g.add((node, RDF.type, HW1.DepthPairFactor)); g.add((node, HW1.inExperiment, exp)); g.add((node, HW1.hasDefinition, HW1[factor_local]))
+                g.add((node, HW1.hasPrevious, data_component_iri(name, s0, "depth"))); g.add((node, HW1.hasCurrentFrame, data_component_iri(name, s1, "depth"))); count += 1
+                if spec.get("deferred"):
+                    g.add((node, HW1.evaluationState, HW1.Pending))
+                else:
+                    value, mask, support = _measured_with_mask(over, factors, f"pair {i}_{j}", spec["measure_mask"], d0, d1, settings)
+                    g.add((node, HW1.value, _double_literal(value))); g.add((node, HW1.status, status_for(over, _storable(value), settings, factors))); g.add((node, HW1.evaluationState, HW1.Measured)); measured += 1
+                    if mask is not None:
+                        mf = _write_mask_artifact(mask, artifact_root, artifact_relative_to, factor_local, f"{i}_{j}.png")
+                        if mf: g.add((node, HW1.maskFile, Literal(mf)))
+                    if spec.get("count_property"): g.add((node, HW1.supportCount, Literal(int(support or 0), datatype=XSD.integer)))
+    if count and count == measured: g.add((exp, RDF.type, HW1.FullEvaluatedFrames))
+    return g, {"frames": len(frames), "factors": count, "annotations": 0, "pairs": 0}
+
+
 def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
                         artifact_root=None, artifact_relative_to=None):
-    """Measure what the declaration selected. -> (graph, counts). The MACHINE SECTION.
-
-    CONTRACT
-        In:     decl — `read_declaration`'s dict: the validated declaration.
-                data_dir — the capture directory (`_capture_dir`), which is where
-                the pixels are; `_pair_frames` addresses it exactly as `batch2ttl`
-                did, so the frame IRIs of the two files are the same IRIs.
-                digest — the §3.1 seal over the student section, stamped here.
-                decls / factors — TBox declarations; loaded if omitted.
-        Out:    (graph, {"frames": n, "annotations": n, "pairs": n}).
-
-        Emits, per §4.3 — and ONLY about the student's Experiment
-        IRI, which the machine section re-opens rather than re-declares:
-
-            <exp> hw1:declarationDigest "…64 hex…" ;
-                  hw1:hasFactorSetting <…/setting/<factor>/<param>> … ;   # DEFAULTS ONLY
-                  hw1:producesAnnotation <…/annotation/<n>/rgb> … ;
-                  hw1:producesPair <…/pair/<i>_<j>> … .
-
-    THE THREE RULES THAT MAKE THIS SELECTION-AWARE
-      1. ONE ANNOTATION PER FRAME PER MODALITY THAT HAS A SELECTED FACTOR. A
-         modality with none gets NO node — not an empty one. Totality is per
-         selection: inside the declared scope a missing property is a bug, not a
-         state, and outside it there is no node to be missing anything.
-      2. PAIRS ARE ALWAYS MINTED, for every consecutive pair, even when no pair
-         factor is selected — the pair nodes are what carries ADJACENCY into the
-         experiment file, and `reconstruct.py` reads nothing else. Their
-         observables follow the selection; their `hw1:qualificationStatus` is
-         total, vacuously Pass when there is no pair factor to fail.
-      3. ONLY DEFAULTS ARE WRITTEN AS SETTINGS. The student's own settings are
-         above the marker already — re-emitting them here would give one parameter
-         two nodes and, if a hand edit ever disagreed, two levels. Given vs
-         defaulted is recoverable from which side of the marker a setting sits on
-         (§4.2), which is exactly what `explore` prints.
-
-    ONE DICT, READ ONCE — A SETTING DRIFT IS A LIE IN THE FILE
-        The `tau_hi` handed to `frame_clip_hi_fraction`, the `hw1:settingValue` on
-        the tauHi FactorSetting, and the `maxClipHiFraction` that decided the
-        status all come out of ONE dict (`decl["required"]`), once. Re-deriving any
-        of them — a default in a function signature, a second parse, a "sensible"
-        round-trip through str — produces a file that RECORDS one treatment and
-        REPORTS another. Nothing errors, every number looks plausible, and the
-        experiment is unreproducible forever.
-
-    WHAT IS DELIBERATELY ABSENT
-        No `hw1:hasFrame`, no `schema:contentUrl`, no `hw1:Batch` type, no floor:
-        those are STRUCTURE, derived from the capture directory at measure time
-        (and optionally recorded in a deprecated batch.ttl sidecar). The
-        annotations reach structure through `hw1:annotatesFrame` and
-        `hw1:describesImage`, and that IRI identity is the entire join. No run node
-        either — `hw1:mapMeanL2` and `hw1:coverageF` are written later by
-        `write_run`; measurement does not know the reconstruction outcome and must
-        not pretend to.
-    """
+    """Full machine section: settings, annotations, pairs, statuses. Full strategy note: docs/triplestore.md."""
     decls = load_parameter_declarations(_ONTOLOGY_TTL) if decls is None else decls
     factors = load_quality_factors(_ONTOLOGY_TTL) if factors is None else factors
+
+    # New TBoxes advertise hw1:Factor; route only that schema through the
+    # occurrence writer.  Legacy artifacts continue through the container adapter
+    # below, which is important for historical course fixtures.
+    # The declaration's explicit schemaVersion selects the writer.  This keeps
+    # historical v4 declarations readable while new scaffolds emit v5 Factors.
+    if str(decl.get("schema_version", "")).startswith("5"):
+        return _build_semantic_machine_graph(
+            decl, data_dir, digest, decls, factors,
+            artifact_root=artifact_root, artifact_relative_to=artifact_relative_to)
 
     exp = decl["exp_iri"]
     expname = decl["exp_name"]
@@ -3964,30 +3129,7 @@ def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
 
 
 def cmd_experiment(args):
-    """Assess ONE student declaration, ONCE, into its own file (§3.1).
-
-    The six steps, in order, each of which is a contract somewhere:
-
-      1. WRITE-ONCE CHECK. A file that already carries `MACHINE_MARKER` is a hard
-         error — no `--force`, no re-assess path. One assessment per file; every
-         tuning is a brand-new experiment under a brand-new name, and the notebook
-         stays honest because nothing in it is ever superseded in place.
-      2. VALIDATE THE DECLARATION (`read_declaration`, §4.2): one Experiment, the
-         name, the batch, the selection, the settings, the whitelist. Every
-         violation names the offending triple.
-      3. RESOLVE THE PIXELS: declaration -> hw1:batchFile (the capture
-         directory, or a deprecated batch.ttl) -> rgb/ + depth/, and cross-check
-         hw1:onBatch against the directory BEFORE reading a pixel — a mismatched
-         batch name makes every downstream table join to nothing, and finding
-         that out afterwards costs the whole pass.
-      4. SEAL. sha256 of the file's bytes up to the marker line, stamped as
-         `hw1:declarationDigest`. Without it, write-once is unenforceable.
-      5. MEASURE AND QUALIFY what was declared, from the ONE settings dict
-         (`build_machine_graph`).
-      6. APPEND — never rewrite. The declaration is opened in APPEND mode, so
-         there is no code path in this command that can damage the half of the
-         file a human wrote.
-    """
+    """Measure + append the machine section ONCE (hard error if sealed). Full strategy note: docs/triplestore.md."""
     path = args.declaration
     if not os.path.isfile(path):
         raise ValueError(f"{path}: no such declaration file")
@@ -4088,7 +3230,7 @@ def cmd_experiment(args):
 
 
 def _modalities_of(g):
-    """The annotation modalities present in a machine graph, for the summary line."""
+    """Modalities covered by a factor selection."""
     kinds = []
     for kind in _ANNOTATION_KINDS:
         if any(str(a).endswith(f"/{kind}")
@@ -4335,6 +3477,13 @@ def _classify(path):
     assessed = _marker_offset(text) is not None
 
     if batches and exps:
+        # v5 assessed files intentionally embed the Batch snapshot so a single
+        # Turtle file is self-contained for SPARQL. Legacy v4 batch sidecars and
+        # experiment files remain mutually exclusive.
+        version = g.value(exps[0], HW1.schemaVersion)
+        has_factors = any(g.subjects(HW1.inExperiment, exps[0]))
+        if (version is not None and str(version).startswith("5")) or has_factors:
+            return "experiment" if assessed else "declaration"
         raise ValueError(
             f"{path}: this file declares BOTH a hw1:Batch ({batches[0]}) and a "
             f"hw1:Experiment ({exps[0]}). §3 keeps them in separate "
@@ -4837,7 +3986,7 @@ def _failing_nodes(g, factors, factor_local, this_run):
     """Every node whose `hw1:statusProperty` for this factor reads hw1:Fail.
 
     THE GENERIC RESOLUTION, and the whole reason the TBox keeps the
-    `statusProperty` wiring after the SPARQL layer was deleted (§10): this is
+    `statusProperty` wiring remains useful alongside SPARQL: this is
     `?factor hw1:statusProperty ?sp . ?node ?sp hw1:Fail .` in Python, with no
     predicate enumerated and no factor named. A menu factor added to the TBox is
     picked up here with no edit.
@@ -5027,7 +4176,7 @@ def _print_verdict(exp, g, factors, decls, given, path):
 
 
 def _view_experiment(path):
-    """View 3: an ASSESSED experiment — settings, per-frame table, summary, verdict."""
+    """Terminal view of one assessed experiment. Full strategy note: docs/triplestore.md."""
     # `read_experiment` verifies the §3.1 seal FIRST. A file edited above the
     # marker raises here, which is the entire point: printing a table of numbers
     # computed for a treatment the file no longer declares would be the most
@@ -5209,26 +4358,53 @@ def _view_compare(paths):
     return 0
 
 
+def _query_rows(result):
+    """Return a stable `(headers, rows)` projection for a SPARQL SELECT result."""
+    headers = [str(var) for var in result.vars]
+    rows = []
+    for row in result:
+        rows.append(["" if row[var] is None else str(row[var]) for var in result.vars])
+    return headers, rows
+
+
+def cmd_query(args):
+    """Run a read-only SPARQL query against one .ttl file. Full strategy note: docs/triplestore.md."""
+    if not os.path.isfile(args.path):
+        raise ValueError(f"{args.path!r}: query needs a local Turtle file")
+    query_text = args.query_text if args.query_text is not None else _read_text(args.query_file)
+    graph = Graph()
+    try:
+        graph.parse(data=_read_text(args.path), format="turtle")
+    except Exception as exc:
+        raise ValueError(f"{args.path}: not valid Turtle: {exc}") from None
+    result = query_graph(graph, query_text)
+
+    if result.type == "SELECT":
+        headers, rows = _query_rows(result)
+        if args.format == "csv":
+            writer = csv.writer(sys.stdout)
+            writer.writerow(headers)
+            writer.writerows(rows)
+        elif args.format == "json":
+            print(json.dumps([dict(zip(headers, row)) for row in rows], indent=2))
+        else:
+            _print_table(headers, rows)
+        return 0
+    if result.type == "ASK":
+        answer = bool(result.askAnswer)
+        print(json.dumps({"boolean": answer}) if args.format == "json"
+              else str(answer).lower())
+        return 0
+
+    # CONSTRUCT and DESCRIBE results are graphs. Turtle is the useful default;
+    # `--format json` selects a standards-friendly JSON-LD serialization.
+    serialization = "json-ld" if args.format == "json" else "turtle"
+    print(result.graph.serialize(format=serialization), end="")
+    return 0
+
+
 def cmd_explore(args):
-    """Print what a .ttl file says. READ-ONLY: measures nothing, writes nothing.
-
-    Four views, dispatched on WHAT THE ARGUMENT IS rather than on what it is
-    called (§7.1, `_classify`):
-
-      1. a batch file            -> header + frame table + stem gaps
-      2. an unassessed declaration -> batch header, selection, required settings
-      3. an assessed experiment  -> settings, per-frame table, summary, VERDICT
-      4. several paths           -> the comparison table
-
-    It re-implements no rule. The status rule is `status_for`'s and was baked at
-    measure time; the completeness rule is `read_declaration`'s; the frame
-    verdict, the usable-link rule and the seal check are `read_experiment`'s; the
-    segment cut is `cut_contiguous_segments`'. What is computed HERE is only the
-    projection: which columns, which counts, and the attribution walk of §7.1 —
-    and that walk is generic over the TBox (`statusProperty` for failing factors,
-    `paramPrimaryFactor` / `paramAffectsFactor` for culprit settings), so adding a
-    menu factor requires no edit in this section.
-    """
+    """Read-only terminal tables (writes/measures nothing). Full strategy note: docs/triplestore.md."""
     paths = list(args.paths)
     missing = [p for p in paths if not (os.path.isfile(p) or _is_capture_dir(p))]
     if missing:
@@ -5257,66 +4433,7 @@ def cmd_explore(args):
 #   with no RDF in it at all — the grading happened upstream, in `status_for`.
 # =============================================================================
 def cut_contiguous_segments(usable_links):
-    """Usable links -> the maximal runs of frames they chain. §8.3.
-
-    CONTRACT
-        In:     usable_links — an iterable of `(i, j)` integer frame-index pairs,
-                each one a USABLE LINK in the sense of §4.5: the pair passed and
-                both of its endpoint frames passed. `read_experiment` derives that
-                list; this function re-derives nothing and grades nothing.
-        Out:    [[i, j, k, …], …] — disjoint segments, each an ascending list of
-                frame indices, in ascending order. Every consecutive index pair
-                inside a segment is a link that was in `usable_links`.
-
-        A run of `k` chained links yields `k + 1` FRAMES: the links are the gaps
-        between frames, so two links (7,8),(8,9) are the three frames 7,8,9. Getting
-        that off by one silently shifts every length verdict by one frame.
-
-        EVERY maximal chain is returned, whatever its length. The `min_length`
-        argument and its `minSegmentLength` parameter were deleted on 2026-07-31:
-        the floor's justification — below ~20 frames the constant-velocity prior
-        has nothing to average — is a fact about the ICP backend, not about the
-        quality of the pixels, and this layer grades pixels. Measured on floor 1
-        it never earned its place either: the selected run loses to the full batch
-        at every floor tried, because the cost is the SEAMS between segments and a
-        length floor does not touch a seam.
-
-        A missing link is a CUT — and so is a BREAK IN THE CHAIN: if one link's `j`
-        is not the next link's `i` the sequence has a hole (a pair that failed, or
-        one that was never measured at all), and gluing across it would invent a
-        transition nobody graded. Same failure, same treatment. Links are sorted and
-        de-duplicated first, so the caller's iteration order cannot fabricate a hole
-        that is not in the data.
-
-    WHY THIS CUTS SEGMENTS INSTEAD OF DROPPING BAD FRAMES
-        This is the reason selection has this shape at all, and the obvious
-        alternative — grade the frames, drop the bad ones, reconstruct what is left
-        — is wrong in the worst available way: it produces a plausible number
-        rather than a crash.
-
-        Drop frame k from the middle of a run and you have not removed a frame. You
-        have SILENTLY CREATED a pair (k-1, k+1) that nobody measured. Two things
-        break at once:
-
-          1. THE STORED OBSERVABLES START LYING. `<pair/k-1_k>` and `<pair/k_k+1>`
-             describe transitions that no longer occur, and the transition that now
-             DOES occur has no node, no `medianDepthDifference`, and no grade. Every
-             quality claim made about the run afterwards is a claim about pairs that
-             were not reconstructed.
-          2. THE MOTION ROUGHLY DOUBLES across the splice. `reconstruct.py`
-             initialises each registration from the previous transform
-             (constant velocity) and gates correspondences at a distance sized for
-             consecutive frames; a spliced pair violates both assumptions exactly
-             where the data was already worst. Removing the bad frame can therefore
-             cost more accuracy than keeping it would have — a genuinely
-             counter-intuitive result, and one students reproduce by accident if
-             this function is written the obvious way.
-
-        A cut, by contrast, only ever happens where the sequence was going to be
-        interrupted anyway. No spliced pair is ever created, because the frames on
-        either side of a cut end up in different segments, and each segment is
-        reconstructed independently from its own first-frame anchor.
-    """
+    """Usable links -> maximal contiguous segments (no length floor). Full strategy note: docs/triplestore.md."""
     links = sorted(set((int(i), int(j)) for i, j in usable_links))
     segments = []
     current = []
@@ -5339,12 +4456,12 @@ def cut_contiguous_segments(usable_links):
 # =============================================================================
 def _build_parser():
     p = argparse.ArgumentParser(
-        description="HW1 data-quality CLI (rdflib only). Scaffold a DECLARATION "
+        description="HW1 data-quality CLI (rdflib + local SPARQL). Scaffold a DECLARATION "
                     "over a capture directory (declare), assess it (experiment), "
                     "and read the result back as terminal tables (explore). "
                     "batch2ttl is a deprecated optional sidecar for generation "
-                    "provenance. reconstruct.py completes the suite. No server, "
-                    "no daemon, no SPARQL: capture directories and .ttl files.",
+                    "provenance. reconstruct.py completes the suite. SPARQL runs "
+                    "locally over .ttl files; no server or daemon is required.",
         epilog="A measured value means nothing without the settings it was "
                "measured and judged under, so the settings live in the same file "
                "as the values — the student's own declaration, which is "
@@ -5455,6 +4572,20 @@ def _build_parser():
                           "the comparison view (§7.1). Writes nothing "
                           "and measures nothing.")
     exl.set_defaults(func=cmd_explore)
+
+    qry = sub.add_parser(
+        "query",
+        help="Run a read-only SPARQL query over one local Turtle file. Use a .rq "
+             "file for reusable student queries; no triplestore is required.")
+    qry.add_argument("path", help="Declaration, assessed experiment, or batch Turtle file.")
+    source = qry.add_mutually_exclusive_group(required=True)
+    source.add_argument("--query-file", metavar="FILE",
+                        help="UTF-8 .rq file containing a SPARQL SELECT, ASK, CONSTRUCT, or DESCRIBE query.")
+    source.add_argument("--query-text", metavar="SPARQL",
+                        help="Inline SPARQL query (quote it in the shell).")
+    qry.add_argument("--format", choices=("table", "csv", "json"), default="table",
+                     help="SELECT: table (default), csv, or json; graph results: Turtle or JSON-LD.")
+    qry.set_defaults(func=cmd_query)
 
     return p
 

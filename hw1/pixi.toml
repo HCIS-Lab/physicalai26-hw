@@ -19,6 +19,16 @@ rdflib = "*"
 pytest = "*"
 openjdk = "21.*"
 
+# Open3D pip wheels dynamically load libgomp (Linux) / libomp (macOS).
+# Without these conda runtimes you get: OSError: libgomp.so.1: No such file.
+[feature.habitat.target.linux-64.dependencies]
+libgomp = "*"
+libgcc-ng = "*"
+libstdcxx-ng = "*"
+
+[feature.habitat.target.osx-arm64.dependencies]
+llvm-openmp = "*"
+
 [feature.habitat.pypi-dependencies]
 habitat-lab = { path = "dependencies/habitat-lab/habitat-lab", editable = true }
 simulator = { path = "packages/simulator", editable = true }

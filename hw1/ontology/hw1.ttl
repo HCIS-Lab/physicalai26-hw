@@ -2,7 +2,7 @@
 #
 # This file is the ONLY ontology file in the project. It is hand-edited; every
 # other .ttl in the tree is machine generated or student-authored
-# (hw1/experiments/<expname>.ttl written by the STUDENT above the machine
+# (experiments/<expname>.ttl written by the STUDENT above the machine
 # marker and by `api.py experiment` / `reconstruct.py` below it).
 #
 # This file is the TBox: every IRI, class name, predicate name and parameter
@@ -31,7 +31,7 @@
 #     the verdict section of `api.py explore`.
 #
 #  A. AN EXPERIMENT IS A STUDENT-AUTHORED DECLARATION, not a machine-generated
-#     total measurement pass. The student writes Turtle: which batch
+#     complete measurement pass. The student writes Turtle: which batch
 #     (hw1:batchFile + hw1:onBatch), which factors to evaluate
 #     (hw1:evaluatesFactor, 1..8 from the menu), and any threshold or measurement
 #     overrides (hw1:hasFactorSetting). `api.py experiment` then measures exactly
@@ -39,7 +39,7 @@
 #     same file.
 #
 #  B. SELECTION SCOPES EVERYTHING. Nothing is measured that was not selected, so
-#     "total" means total OVER THE SELECTION: the recorded setting vector
+#     "complete" means complete OVER THE SELECTION: the recorded setting vector
 #     covers the selected factors plus the always-on run factors, and a
 #     measurement carries exactly the selected factors' observables. Within that
 #     scope a missing property is a bug, not a state. The run factors
@@ -48,7 +48,7 @@
 #
 #  C. MEASUREMENTS ARE PER MODALITY, AND THERE IS ONE AGGREGATE PREDICATE. One
 #     measurement per frame per modality that has at least one selected factor
-#     (IRI tail .../annotation/<n>/<kind>, kind is rgb or depth; a modality with
+#     (IRI tail .../annotation/<kind>_<n>, kind is rgb or depth; a modality with
 #     no selected factor gets NO node), linked to the raster it measures by
 #     hw1:describesImage, plus explicit experiment-scoped Factor occurrences
 #     (see the measurement model section), aggregated with the single predicate
@@ -57,7 +57,7 @@
 #  D. WRITE-ONCE, SEALED. An experiment file is assessed exactly once; re-running
 #     `experiment` on a file that already has the marker is a hard error, and any
 #     tuning is a brand-new file under a brand-new name. hw1:declarationDigest is
-#     the tamper seal that makes that enforceable. hw1/experiments/ is therefore
+#     the tamper seal that makes that enforceable. experiments/ is therefore
 #     an append-only lab notebook. An experiment is identified by its NAME
 #     (file stem = IRI tail).
 #
@@ -105,7 +105,7 @@
 #   |                                      DECLARED BY THE STUDENT:
 #   |-- hw1:batchFile          --> "path/to/capture-dir" how the CLI reaches pixels
 #   |-- hw1:onBatch            --> Batch                 must match that directory's batch
-#   |-- hw1:evaluatesFactor    --> QualityFactor (FactorDefinition) 1..8 menu factors; the scope
+#   |-- hw1:evaluatesFactor    --> QualityFactor (reusable definition) 1..8 menu factors; the scope
 #   |-- hw1:hasFactorSetting   --> FactorSetting      roles Measurement | Qualification
 #   |                                      WRITTEN BY THE MACHINE, BELOW THE MARKER:
 #   |-- hw1:declarationDigest  --> "<64 hex>"            seal over the student section
@@ -158,10 +158,10 @@ hw1:frameIndex a rdf:Property ; rdfs:range xsd:integer ;
 # =============================================================================
 # 3. Closed term vocabularies
 # =============================================================================
-# Four small enumerations. Each is a class with a fixed set of named individuals,
-# so code can read the term instead of parsing prose out of a comment. All
-# four are skos:Concept subclasses to say "this is a closed vocabulary of terms",
-# not a class of measurable things.
+# Small closed enumerations. Each is a class with a fixed set of named
+# individuals, so code can read the term instead of parsing prose out of a
+# comment. These vocabularies are skos:Concept subclasses to say "these are
+# closed vocabularies of terms", not classes of measurable things.
 
 hw1:Polarity a rdfs:Class ; rdfs:subClassOf skos:Concept ;
     rdfs:comment "Which direction of a factor's value is better. Read by the status rule."@en .
@@ -196,12 +196,12 @@ hw1:QualificationSetting a hw1:SettingRole ; skos:prefLabel "qualification setti
 
 
 # =============================================================================
-# 4. Experiment layer -- declared by the student, completed by `experiment` and
-#    `reconstruct.py`
+# 4. Experiment layer -- declared by the student, then extended by `experiment`
+#    and `reconstruct.py`
 # =============================================================================
 # THE DECLARATION WORKFLOW, in the order the file is written:
 #
-#   1. The student writes hw1/experiments/<expname>.ttl by hand. Above the marker
+#   1. The student writes experiments/<expname>.ttl by hand. Above the marker
 #      line there may be NOTHING but the Experiment node's own triples
 #      (rdf:type, rdfs:label, hw1:batchFile (capture dir), hw1:onBatch, hw1:evaluatesFactor,
 #      hw1:hasFactorSetting) and the hw1:FactorSetting nodes they point at. An
@@ -233,11 +233,11 @@ hw1:QualificationSetting a hw1:SettingRole ; skos:prefLabel "qualification setti
 #      anything; a mismatch means the declaration was edited after assessment,
 #      which makes it a different experiment that needs a different file.
 #
-# The consequence, and the pedagogical point: hw1/experiments/ is an append-only
+# The consequence, and the pedagogical point: experiments/ is an append-only
 # LAB NOTEBOOK. Declaration and verdicts in one file are always mutually
 # consistent, and the report is the series of declarations and what they returned.
 #
-# Which vector is "total" is driven entirely by hw1:evaluatesFactor: for every
+# Which vector is "complete" is driven entirely by hw1:evaluatesFactor: for every
 # selected factor, its hw1:qualifiedBy
 # parameter, every Measurement parameter whose primary or affected factor is
 # selected, and the three run-factor parameters always. An experiment evaluating
@@ -251,10 +251,10 @@ hw1:schemaVersion a owl:DatatypeProperty ; rdfs:domain hw1:Experiment ; rdfs:ran
     rdfs:comment "Schema version recorded by the declaration."@en .
 
 hw1:FrameAnnotation a rdfs:Class ;
-    rdfs:comment "One frame's ONE MODALITY as measured by ONE experiment: that modality's selected observables, their statuses, and the hw1:qualificationStatus aggregate over them. Up to two per frame -- .../annotation/<n>/rgb and .../annotation/<n>/depth -- and a modality with no selected factor gets NO node at all, so an annotation's mere existence already says its modality was in scope."@en .
+    rdfs:comment "One frame's ONE MODALITY as measured by ONE experiment: that modality's selected observables, their statuses, and the hw1:qualificationStatus aggregate over them. Up to two per frame -- .../annotation/rgb_<n> and .../annotation/depth_<n> -- and a modality with no selected factor gets NO node at all, so an annotation's mere existence already says its modality was in scope."@en .
 
 hw1:FramePair a rdfs:Class ;
-    rdfs:comment "An ordered pair of temporally adjacent frames as measured by ONE experiment; carries the pairwise observables that predict frame-to-frame ICP success. Minted per experiment, not per batch. ALWAYS minted, for every consecutive pair, even when no pair factor is selected. Only the OBSERVABLES follow the selection."@en .
+    rdfs:comment "Repository representation of the specification's ordered RGBPair/DepthPair evidence: two temporally adjacent frames as measured by ONE experiment. Carries pairwise observables that predict frame-to-frame ICP success. Minted per experiment, not per batch. ALWAYS minted, for every consecutive pair, even when no pair factor is selected. Only the OBSERVABLES follow the selection."@en .
 
 hw1:ReconstructionRun a rdfs:Class ;
     rdfs:comment "One execution of reconstruct.py over one experiment, under one hw1:SelectionMode. Carries the reconstruction outcome values and their statuses. Its two factors, hw1:ReconstructionAccuracy and hw1:Coverage, are never selectable and always evaluated."@en .
@@ -363,7 +363,7 @@ hw1:clipLoFraction a rdf:Property ; rdfs:domain hw1:FrameAnnotation ; rdfs:range
 hw1:clipLoFractionStatus a rdf:Property ; rdfs:domain hw1:FrameAnnotation ; rdfs:range hw1:Status .
 
 # The one observable with NO status property, on purpose: there is no
-# hw1:QualityFactor (FactorDefinition) over it, so there is no polarity and no threshold, so there
+# hw1:QualityFactor over it, so there is no polarity and no threshold, so there
 # is nothing to compute a Pass from. It exists as a deliberately weak baseline --
 # students compare "is the picture dark on average" against the factors that
 # actually predict reconstruction failure and find that it does not. Giving it a
@@ -445,12 +445,18 @@ hw1:qualificationStatus a rdf:Property ; rdfs:range hw1:Status ;
 #
 #   USABLE LINK = the pair is Pass AND both endpoint frames are usable. This is
 #   the segment-cut criterion reconstruct.py selects on.
+#
+# Assessment completeness is a derived application result. It is checked by the
+# reader from the expected Factor occurrences and their evaluationState; it is
+# not represented by an additional rdf:type on the Experiment. This keeps
+# completion metadata from becoming a stale second verdict when deferred
+# measurements are written back.
 
 
 # =============================================================================
 # 6. Quality factors
 # =============================================================================
-# A QualityFactor (FactorDefinition) is the reified answer to "what does this
+# A QualityFactor is the reusable definition of "what does this
 # number mean, and what counts as good". It names the value property it grades,
 # the status property that caches the verdict, the direction that is better,
 # and the parameter whose value is the threshold. Those four links are what make
@@ -464,14 +470,14 @@ hw1:qualificationStatus a rdf:Property ; rdfs:range hw1:Status ;
 # run factors are not selectable and are always evaluated.
 #
 # ONE INVARIANT, and it is the one that keeps the arithmetic honest: NO
-# QualityFactor (FactorDefinition) may declare the aggregate hw1:qualificationStatus as its
+# QualityFactor may declare the aggregate hw1:qualificationStatus as its
 # hw1:statusProperty. The aggregate is the conjunction OF the factor statuses; a
 # factor reading it back would double-count itself, and a generic attribution
 # pass would report the aggregate as a failing "factor" with no threshold behind
 # it to fix.
 
 hw1:QualityFactor a rdfs:Class ;
-    rdfs:comment "A measured property of the data with a defined direction and threshold (FactorDefinition: reusable definition, distinct from one experiment-scoped measurement). NOT a DoE factor -- a settable input is a hw1:Parameter. In DoE terms a QualityFactor is a covariate; that collision is why this class is not called Factor."@en .
+    rdfs:comment "A reusable definition of a measured property of the data with a defined direction and threshold. It is distinct from an experiment-scoped hw1:Factor occurrence. NOT a DoE factor -- a settable input is a hw1:Parameter. In DoE terms a QualityFactor is a covariate; that collision is why this class is not called Factor."@en .
 
 hw1:overProperty a rdf:Property ;
     rdfs:domain hw1:QualityFactor ; rdfs:range rdf:Property ;
@@ -867,12 +873,14 @@ hw1:injectedFrameCount a hw1:Parameter ;
 # =============================================================================
 # 9. Semantic measurement model (the active contract)
 # =============================================================================
-# Each measurement is an explicit, experiment-scoped Factor. Completeness is a
-# closed-world application check; cardinality declarations below document the
-# shape and do not replace validation.
+# Each measurement is an explicit, experiment-scoped Factor. The handout calls
+# this conceptual object a FactorMeasurement; the TBox uses Factor for the
+# occurrence so QualityFactor can remain the reusable definition. Completeness
+# is a closed-world application check; cardinality declarations below document
+# the shape and do not replace validation.
 
 hw1:Factor a owl:Class ;
-    rdfs:comment "One occurrence of one QualityFactor definition in one Experiment (FactorMeasurement). A Factor owns its value, status, masks and support counts; shared Frame and image nodes never carry experiment-specific measurements."@en .
+    rdfs:comment "One experiment-scoped occurrence of one hw1:QualityFactor definition. A Factor owns its value, status, masks and support counts; shared Frame and image nodes never carry experiment-specific measurements."@en .
 hw1:SingleImageFactor a owl:Class ;
     rdfs:subClassOf hw1:Factor ;
     owl:disjointWith hw1:DepthPairFactor ;
@@ -881,17 +889,10 @@ hw1:DepthPairFactor a owl:Class ;
     rdfs:subClassOf hw1:Factor ;
     owl:disjointWith hw1:SingleImageFactor ;
     rdfs:comment "A Factor measured on two distinct, adjacent DepthImages. hasPrevious is the earlier image and hasCurrentFrame is the later image."@en .
-hw1:FullEvaluatedFrames a owl:Class ;
-    rdfs:subClassOf hw1:Experiment ;
-    rdfs:comment "Generated only after the sealed Batch snapshot and every expected selected Factor occurrence validate as Measured with one value and one correctly graded status. This is completion, not an all-pass qualification."@en .
-
 hw1:inExperiment a owl:ObjectProperty ; rdfs:domain hw1:Factor ; rdfs:range hw1:Experiment ;
     rdfs:comment "Experiment owning this measurement occurrence."@en .
 hw1:hasDefinition a owl:ObjectProperty ; rdfs:domain hw1:Factor ; rdfs:range hw1:QualityFactor ;
-    rdfs:comment "Reusable definition measured by this occurrence (FactorMeasurement hasDefinition FactorDefinition). Distinct from the occurrence itself."@en .
-hw1:factorType a owl:ObjectProperty ; rdfs:domain hw1:Factor ; rdfs:range hw1:QualityFactor ;
-    owl:equivalentProperty hw1:hasDefinition ;
-    rdfs:comment "Alias of hw1:hasDefinition, kept for compatibility. New writers emit hw1:hasDefinition."@en .
+    rdfs:comment "Reusable QualityFactor definition measured by this occurrence. Distinct from the occurrence itself."@en .
 hw1:hasCurrentFrame a owl:ObjectProperty ; rdfs:domain hw1:Factor ; rdfs:range schema:ImageObject ;
     rdfs:comment "The current image (not a Frame). For pair factors it is the later DepthImage."@en .
 hw1:hasPrevious a owl:ObjectProperty ; rdfs:domain hw1:DepthPairFactor ; rdfs:range hw1:DepthImage ;
@@ -901,7 +902,7 @@ hw1:value a owl:DatatypeProperty ; rdfs:domain hw1:Factor ; rdfs:range xsd:doubl
 hw1:status a owl:ObjectProperty ; rdfs:domain hw1:Factor ; rdfs:range hw1:Status ;
     rdfs:comment "Baked binary verdict (Pass or Fail), required exactly once in Measured state."@en .
 hw1:evaluationState a owl:ObjectProperty ; rdfs:domain hw1:Factor ;
-    rdfs:range hw1:EvaluationState ; rdfs:comment "Pending, Measured, or MeasurementError."@en .
+    rdfs:range hw1:EvaluationState ; rdfs:comment "Pending or Measured. A failed measurement is represented by a fail-closed numeric value and hw1:status hw1:Fail."@en .
 hw1:targetKind a owl:ObjectProperty ; rdfs:domain hw1:QualityFactor ; rdfs:range hw1:TargetKind .
 hw1:evaluationPhase a owl:ObjectProperty ; rdfs:domain hw1:QualityFactor ; rdfs:range hw1:EvaluationPhase .
 hw1:supportCount a owl:DatatypeProperty ; rdfs:domain hw1:Factor ; rdfs:range xsd:integer ;
@@ -910,7 +911,6 @@ hw1:supportCount a owl:DatatypeProperty ; rdfs:domain hw1:Factor ; rdfs:range xs
 hw1:EvaluationState a rdfs:Class ; rdfs:subClassOf skos:Concept .
 hw1:Pending a hw1:EvaluationState ; skos:prefLabel "pending"@en .
 hw1:Measured a hw1:EvaluationState ; skos:prefLabel "measured"@en .
-hw1:MeasurementError a hw1:EvaluationState ; skos:prefLabel "measurement error"@en .
 hw1:TargetKind a rdfs:Class ; rdfs:subClassOf skos:Concept .
 hw1:RGBTarget a hw1:TargetKind ; skos:prefLabel "RGB image"@en .
 hw1:DepthTarget a hw1:TargetKind ; skos:prefLabel "depth image"@en .

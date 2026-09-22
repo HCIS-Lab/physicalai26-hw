@@ -8,7 +8,7 @@ baseline) and `mean_l2` (the score). If these pass, the numbers in
 your own `depth_image_to_point_cloud` / `reconstruct` against the fixture is in
 your code.
 
-    pixi run -e habitat python -m pytest hw1/tests/fixtures/test_icp_smoke.py -v
+    pixi run -e habitat python -m pytest tests/fixtures/test_icp_smoke.py -v
 
 Everything here reads from the committed fixture — the capture, `expected.json`
 and `clouds.npz`. There is no generator in the student tree: the fixture is
@@ -31,7 +31,7 @@ _HW1 = os.path.dirname(os.path.dirname(_HERE))       # .../hw1
 
 sys.path.insert(0, _HW1)
 
-import utils                                         # noqa: E402  (hw1/utils.py)
+import utils                                         # noqa: E402  (utils.py)
 
 cv2 = pytest.importorskip("cv2")
 o3d = pytest.importorskip("open3d")

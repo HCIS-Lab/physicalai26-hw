@@ -73,7 +73,7 @@ def _read_intrinsics(capture_root):
             "Every capture directory must ship intrinsics.json "
             '({"width", "height", "hfov"}) alongside GT_pose.npy, and the GT '
             "reference map is unprojected through it. Re-collect the capture "
-            "with hw1/load.py or scripts/evaluate.py (both emit it), or copy the "
+            "with load.py or reconstruct.py (both emit it), or copy the "
             "file from the capture it was derived from. It is NOT defaulted — a "
             "guessed camera yields a wrong reference and therefore wrong scores.")
     with open(path) as f:

@@ -2291,7 +2291,7 @@ class SegmentCutter(unittest.TestCase):
 class BatchGraph(unittest.TestCase):
     """contracts §4.1 — the batch file changes only when the PIXELS change.
 
-    Unchanged from v2 by design (plan.md §3: "Measurers and `batch2ttl`
+    Unchanged from v2 by design (HW1 specification §3: "Measurers and `batch2ttl`
     untouched"). `batch2ttl` is now an optional sidecar: GenerationSettings
     recorded here are what `explore`'s verdict section reads to print the
     Generation fix (§7.1). `declare` / `experiment` name the capture directory
@@ -2422,7 +2422,7 @@ class BatchGraph(unittest.TestCase):
 
         RESOLVED (owner, 2026-07-30): §4.5's single-valued rule is GLOBAL, batch
         settings included — v2 emitted one triple per affected factor here too, and
-        `batch2ttl` was outside plan.md §3's tracks, which is the only reason the
+        `batch2ttl` was outside HW1 specification §3's tracks, which is the only reason the
         two disagreed. So this pins the primary factor as the SOLE value.
         `brightnessGain`'s blame for a ShadowClipping failure is not lost by the
         deletion: `explore` reaches it through `hw1:paramAffectsFactor` in the TBox

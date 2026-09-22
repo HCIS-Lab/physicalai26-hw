@@ -1,74 +1,36 @@
-# `reconstruct.py` — reconstruction CLI and run orchestrator
+# `reconstruct.py` — reconstruction command line
 
-Reconstructs one captured run (`rgb/`, `depth/`, `GT_pose.npy`) with
-geometry-only ICP SLAM, prints trajectory error against ground truth, writes
-the number back into the experiment that describes it, and opens an Open3D
-window with the cloud plus estimated (red) and GT (black) trajectories.
+Use this command to run the geometry pipeline on a capture, inspect its estimated
+trajectory, and evaluate it when ground-truth poses are available. The
+numerical work is in `utils.py`; this script handles command-line options,
+reporting, and visualization.
 
-All registration lives in `utils.py` (headless); all RDF in `api.py`. This
-file orchestrates and visualises — it never parses Turtle and never
-re-derives the IRI scheme.
+## Getting started
+
+Run the command's help option first, then try it on the supplied capture with
+visualization disabled if working on a remote or headless machine. Confirm that
+the reported frame count and input directory match your intended capture before
+comparing scores.
 
 ```bash
-pixi run -e habitat python hw1/reconstruct.py --data_root eval/_data/first_floor/baseline/
-pixi run -e habitat python hw1/reconstruct.py --data_root eval/_data/first_floor/baseline \
-  --experiment hw1/experiments/strict_clip.ttl --no-vis
+pixi run -e habitat python reconstruct.py --help
+pixi run -e habitat python reconstruct.py --data_root <capture-directory>
 ```
 
-## Experiment in, two runs out
+The capture directory contains matching RGB and depth images plus its camera
+metadata. Use the camera metadata stored with that capture. Ground truth is
+used for evaluation and visualization, not as an input to the estimated motion.
 
-With `--experiment <path.ttl>`, one experiment file is both the selection
-input and the result sink, so a run is self-describing: which frames, under
-which settings, produced which error. Selection comes in through
-`api.read_experiment`'s usable-link query; results go out through
-`api.write_run`.
+## Implementation checkpoints
 
-- **Baseline** (`FullBatch`): the whole batch. This is the convergence
-  outcome.
-- **Selected** (`GoodSegments`): the usable-link segments. This is a
-  **falsification probe**, not a repair promise — it tests whether failed
-  inputs are load-bearing while recording the splice, gap, and gate evidence
-  for how deletion itself can hurt. Read the selected run together with its
-  `spliceCount`/`maxGapLength`/`gatedSteps`, not just its error.
+- Verify one-frame depth loading and point-cloud generation first.
+- Check a pairwise registration on adjacent frames before chaining a sequence.
+- Confirm that the first camera defines the trajectory origin and that all
+  reported positions use a consistent coordinate frame.
+- Compare runs using the same capture and clearly reported settings.
+- If using a frame selection or mask, record what was selected and explain how
+  it affects the sequence being reconstructed.
 
-Both runs execute by default, because their comparison is the deliverable.
-`--baseline-only` / `--selected-only` restrict; `--no-write` prints without
-touching the file. Without `--experiment` this is a plain whole-batch visual
-run (no selection, no write-back).
-
-## Why segments, not a frame filter
-
-Selection cuts usable links into maximal **contiguous** segments and
-concatenates them, so inside a segment every surviving pair is still a
-consecutive capture pair — exactly what the constant-velocity prior and the
-per-step gate are sized for. Only the handful of segment boundaries are
-splices. Filtering frames one by one would widen every surviving step and
-score worse for reasons unrelated to frame quality. If no usable link exists
-at all, no selected run is written: an `INF` run would conflate "nothing to
-reconstruct" with measurement failure.
-
-A personal policy can replace the default status-driven selection via
-`--selection-query <file.rq>` (a local SPARQL `SELECT` binding `?frame` or
-`?frameIndex`). Results are validated against the experiment's frames and
-cut into contiguous segments, so custom queries cannot smuggle in hidden
-temporal jumps.
-
-## Flags worth knowing
-
-| Flag | Meaning |
-|---|---|
-| `--data_root` | Capture directory. Stays explicit even though the experiment names it: a batch-mismatch guard warns loudly rather than scoring capture A into capture B's experiment. |
-| `--version` | `open3d` or `my_icp`. The experiment's recorded `icpBackend` is authoritative — disagreeing with it is a hard error, not an override; with neither, the default is `open3d`. |
-| `--reference-root` | Clean capture used to build the whole-scene GT map, adding the `coverageF` map metric at 10 cm alongside the trajectory `mapMeanL2`. |
-| `--mask-dir` / `--mask-factor` | One exported factor-mask directory (255 = drop); adds a `MaskFiltered` run. |
-| `--no-vis` / `--no-write` | Skip the Open3D window / print without writing. |
-
-## Write-back
-
-Each run goes through `api.write_run` with `mapMeanL2` (a trajectory metric
-despite the legacy name), `gatedSteps`, and — for selected runs — splice/gap
-metadata plus one `hw1:usedFrame` per consumed frame, so provenance is
-answerable from the experiment alone. Missing GT scores `inf`, written as
-`"INF"^^xsd:double`, which grades FAILED — fail-closed, like every measurer.
-Per-link diagnostics (prior, applied transform, gate firings, fitness, RPE,
-drift increments) land in a JSON sidecar next to the experiment.
+Consult `utils.py` and the CLI help for supported options. Include the metric,
+units, number of evaluated frames, runtime, and relevant settings in your
+report. Explain failures and limitations rather than reporting a score alone.

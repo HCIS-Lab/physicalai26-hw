@@ -1,534 +1,244 @@
-# Ontology-Driven Evaluation for Geometric ICP 3D Reconstruction
+# Homework 1 — 3D Scene Reconstruction from RGB-D Observations
 
-You implement frame-to-frame point-to-plane ICP over RGB-D captures, then use a
-sealed experiment notebook to explain why a reconstruction succeeds or fails.
-The full onboarding guide follows below (§HW1); read the objectives, setup,
-and workflow overview first, then work through it end to end.
+The assignment has two phases:
+
+1. Reconstruct the provided first-floor capture of apartment_0.
+2. Collect a second-floor capture with Habitat-Sim, reconstruct it with the
+   same pipeline, and compare the two results.
 
 ## Learning objectives
 
-By the end of HW1 you can:
+You should be able to:
 
-1. **Implement geometric ICP from scratch** — pinhole back-projection with
-   validity masking, point-to-point ICP (cKDTree correspondences, Kabsch/Umeyama
-   SVD with reflection fix), and the SLAM loop (frame streaming,
-   constant-velocity init, per-step plausibility gate, frame-0 anchoring).
-   Targets live in `hw1/utils.py`; details in §5.1 below.
-2. **Implement raster quality-factor measurers** — the eight measurement
-   functions behind the factor menu in `hw1/api.py`, each with an exact
-   formula/units/validity/fail-closed contract. Details in §5.2 below.
-3. **Diagnose through the ontology, not the debugger** — when reconstruction
-   fails, name the violated quality condition, measure it, and read the
-   attribution: *which factor failed, under which setting, and what kind of fix
-   that implies* (regenerate data vs re-measure vs re-cut the threshold).
-4. **Close the loop on your own data** — Phase 1 ends in a supported diagnosis
-   of provided corrupted pixels; Phase 2 ends in a new self-collected capture
-   whose full-batch run passes.
-5. **Argue from a sealed evidence chain** — one experiment file holding a
-   non-retractable prediction, measured values, baked verdicts, two
-   reconstruction outcomes, and an attribution that survives scrutiny.
+- back-project valid depth pixels with the pinhole camera model;
+- voxel-downsample point clouds and perform Open3D global registration with RANSAC;
+- refine the RANSAC transform with point-to-point or point-to-plane ICP;
+- accumulate a 3D map and camera trajectory without using GT poses as reconstruction input;
+- inspect RGB-D data quality and relate measurements to alignment behavior;
+- report Mean L2 Distance, evaluated frame count, units, runtime, and hyperparameters.
 
-## Setup
+## Environment
 
-One-time setup, from the repository root:
+The Pixi workspace for this checkout is the directory containing this file and
+pixi.toml:
 
-```bash
+~~~bash
 pixi install -e habitat
 pixi run -e habitat python -c "import open3d, rdflib; print('ready')"
-```
+~~~
 
-Every command below runs from the repository root with `pixi run -e habitat`.
+The supported workflow is 64-bit Linux. Clone with submodules and run from
+physicalai26-hw/hw1 in this checkout:
 
-Get the Phase-1 capture (the injected-corruption handout; students just see
-"the first-floor capture"):
-
-> https://drive.google.com/file/d/1GKa5nNexuRSCDBXQII_K2Q50Ky6rydx3/view?usp=sharing
-
-Unpack it under `eval/` so each capture directory holds `rgb/<stem>.png`
-(8-bit colour), `depth/<same-stem>.png` (16-bit millimetres, 0 = no return),
-and `intrinsics.json`. First contact is always:
-
-```bash
-pixi run -e habitat python hw1/api.py explore <capture-dir>
-```
-
-Verify your setup end to end (details and the worked reference in §5 below):
-
-```bash
-pixi run -e habitat pytest hw1/tests/test_factor_measurers.py \
-  hw1/tests/test_factor_mask_pipeline.py hw1/tests/test_diagnostic_metrics.py -q
-```
-
-| Symptom | Meaning |
-|---|---|
-| declaration digest mismatch | student section edited after assessment; make a new experiment |
-| `experiment` refuses to run | file already sealed — that is the design, not a bug |
-| selected run much worse than baseline | real splice/gap effect; read `spliceCount`/`maxGapLength`/`gatedSteps` |
-| RGB factor fails, geometry unchanged | true input condition, not load-bearing for geometry-only ICP — say both in the report |
-| no Generation verdict on provided data | no generator level recorded on the batch; never invent one |
-
-## Experiment-centric workflow
-
-The organizing rule: **an experiment is something you design, not something
-the tool runs.** You author a Turtle *declaration* — which factors to
-evaluate, under which settings, judged by which thresholds — and the tooling
-measures exactly what you declared, bakes Pass/Fail verdicts next to every
-value **in the same file**, appends both reconstruction outcomes, and seals
-the whole thing. `hw1/experiments/` grows as an append-only lab notebook:
-every tuning idea is a new file under a new name, and old files never change.
-
-```text
-1. explore        see the capture directory before measuring anything
-2. declare        scaffold <name>.ttl (`api.py declare --data-dir`), then edit it:
-                  trim the factors, add settings, write the PREDICTION
-3. experiment     assess once → values + verdicts baked below the marker, file sealed
-4. reconstruct    two runs: full-batch baseline + verdict-driven deletion probe
-5. explore /      read the verdict walk: failing run ⇒ failing factors ⇒
-```
-
-| Command | Does | Writes |
-|---|---|---|
-| `api.py explore <capture-dir or .ttl>…` | read-only terminal tables; several files → comparison view | nothing |
-| `api.py declare --data-dir` | scaffold a declaration (prefixes, capture join, factor selection, PREDICTION TODOs); never assesses | `hw1/experiments/<name>.ttl` (refuses to overwrite) |
-| `api.py experiment <decl.ttl>` | assess one declaration, **once**, then seal | machine section of the same file |
-| `api.py query <file.ttl> --query-file <question.rq>` | run a student-authored local SPARQL query | nothing |
-| `reconstruct.py --experiment` | baseline + selected runs, outcomes into the sealed file | run nodes + diagnostics JSON |
-
-There is **no triple store, no server, no named graphs, and no OWL
-reasoning** — the engine is `hw1/api.py` + rdflib over plain Turtle files.
-The selected run is a **falsification probe** ("the failed frames are harming
-ICP"), not a promised repair: deleting frames breaks temporal links, so the
-run records gate/splice/gap evidence alongside trajectory error. Full
-reference below.
-
----
-
-## HW1 — Ontology-Driven Evaluation for Geometric ICP 3D Reconstruction
-
-Onboarding guide for the experiment-centric design. It walks the whole flow on
-the current tree, where every student deliverable is filled in with the
-reference implementation so the pipeline can be tested end to end.
-
-```bash
-# one-time setup, from the repository root
+~~~bash
+git clone --recurse-submodules https://github.com/HCIS-Lab/physicalai26-hw.git
+cd physicalai26-hw/hw1
 pixi install -e habitat
-pixi run -e habitat python -c "import open3d, rdflib; print('ready')"
-```
+~~~
 
-Every command below runs from the repository root with `pixi run -e habitat`.
+## Capture format
 
----
+Each phase uses one capture directory:
 
-### 1. Goal of Homework 1
-
-Students implement **geometric ICP** (frame-to-frame, point-to-plane,
-constant-velocity init, per-step plausibility gate) reconstructing a camera
-trajectory and map from RGB-D frames — and then learn the lesson the algorithm
-alone cannot teach: **the algorithm is one puzzle piece; the data quality fed
-to it decides whether it works.**
-
-On top of the algorithm sits a semantic layer: an **ontology of qualification
-factors** — measurable properties of the raw RGB and depth rasters that drive
-reconstruction quality. Each factor has a definition, a measurement procedure,
-a polarity, and a Pass/Fail threshold. When reconstruction fails, students do
-not shrug and recollect everything; they read the layer's attribution —
-*which factor failed, under which setting, and what kind of fix that implies*
-— and act on it. The mindset shift being trained: from "my code has a bug" to
-"my input violates a quality condition I can name, measure, and defend."
-
-Success for one homework iteration is an evidence chain: a sealed experiment
-file holding a prediction, measured values, baked verdicts, two reconstruction
-outcomes, and an attribution that survives scrutiny.
-
-### 2. Why two phases, and why the algorithm comes with them
-
-| | Phase 1 | Phase 2 |
-|---|---|---|
-| Data | **provided by us** (first floor) | **collected by the student** (second floor, Habitat sim) |
-| Dirty secret | the capture is corrupted; students are *not told* | whatever the student's own driving causes |
-| What closes the loop | a supported diagnosis (the provided pixels cannot be regenerated) | a **new capture** that makes the full-batch run pass |
-
-The intention of the split:
-
-- **Phase 1 fixes the data so diagnosis is the only move.** Students implement
-  the algorithm and the factor measurers, run them on a capture that secretly
-  contains defective frames, and must *discover* the defects through the
-  ontology tooling — explore, declare factors, assess, reconstruct, attribute.
-  Because they cannot regenerate our pixels, the phase ends at a defensible
-  verdict: which frames are bad, which factor proves it, and whether removing
-  them actually helps the consumer (it does — see §4.3).
-- **Phase 2 makes the loop close for real.** The student drives the agent,
-  collects a second-floor capture, and runs the same loop on their own data.
-  Now every verdict role is actionable: a Generation verdict means re-drive
-  the agent; Measurement/Qualification verdicts mean a number in their own
-  declaration. The algorithm implementation is shared across both phases —
-  what changes is who owns the data and therefore which fixes are honest.
-
-### 3. Phase 1 — get the corrupted dataset
-
-Download the phase-1 capture (peer note: it is the injected-corruption
-handout; students just see "the first-floor capture"):
-
-> https://drive.google.com/file/d/1GKa5nNexuRSCDBXQII_K2Q50Ky6rydx3/view?usp=sharing
-
-Unpack it under `eval/`. The expected layout (one **batch** = one capture
-directory):
-
-```text
+~~~text
 <capture-dir>/
-  rgb/<integer-stem>.png      8-bit colour, one per frame
-  depth/<same-stem>.png       16-bit depth, millimetres, 0 = no return
-  intrinsics.json             {"width","height","hfov"} — THIS capture's camera
-```
+|-- rgb/<integer-stem>.png       # 8-bit RGB image
+|-- depth/<same-stem>.png        # uint16 depth in millimetres; 0 = invalid
+|-- GT_pose.npy                  # [x,y,z,qw,qx,qy,qz], shape (N, 7)
+`-- intrinsics.json              # {"width", "height", "hfov"}
+~~~
 
-RGB and depth files sharing a stem are one frame. A corrupted variant of a
-capture is its **own batch** in its own directory; never overwrite a capture
-in place.
+RGB and depth files with the same integer stem form one Frame. Preserve matching
+stems, resolution, depth encoding, and camera metadata. Always use the
+capture's own intrinsics.json. Document preprocessing or working-copy changes.
 
-First contact, always the same command:
+### Phase 1 — provided first-floor capture
 
-```bash
-pixi run -e habitat python hw1/api.py explore <capture-dir>
-```
+Download and unpack the supplied archive under eval/ without extra nesting or
+renamed files:
 
-`explore` reads the capture directory (rgb/ + depth/) directly — frames, image
-paths, stem gaps — and prints it. There is no `batch.ttl` step. A Generation
-setting is recorded only when the actual generator level is known; never
-invent one — an absent GenerationSetting means "not asserted", not "clean".
+https://drive.google.com/file/d/1GKa5nNexuRSCDBXQII_K2Q50Ky6rydx3/view?usp=sharing
 
-### 4. The experiment-centric design
+Inspect it first:
 
-The organizing rule: **an experiment is something you design, not something
-the tool runs.** You author a Turtle *declaration* — which factors to
-evaluate, under which settings, judged by which thresholds — and the tooling
-measures exactly what you declared, bakes Pass/Fail verdicts next to every
-value **in the same file**, appends both reconstruction outcomes, and seals
-the whole thing. `hw1/experiments/` grows as an append-only lab notebook:
-every tuning idea is a new file under a new name, and old files never change.
+~~~bash
+pixi run -e habitat python api.py explore <capture-dir>
+~~~
 
-The workflow loop:
+Inspect representative RGB/depth images, metadata, invalid depth, and changes
+between consecutive frames. Missing or noisy depth is a possible failure
+condition; do not assume every observation is perfect.
 
-```text
-1. explore        see the capture directory before measuring anything
-2. declare        scaffold <name>.ttl (`api.py declare --data-dir`), then edit it:
-                  trim the factors, add settings, write the PREDICTION
-3. experiment     assess once → values + verdicts baked below the marker, file sealed
-4. reconstruct    two runs: full-batch baseline + verdict-driven deletion probe
-5. explore /      read the verdict walk: failing run ⇒ failing factors ⇒
-```
+### Phase 2 — student-collected second-floor capture
 
-#### 4.1 The ontology engine: rdflib only
+~~~bash
+pixi run -e habitat python load.py --config configs/second_floor.yaml --output-root eval/_data/second_floor/<student-id>
+~~~
 
-There is **no triple store, no server, no named graphs, and no OWL
-reasoning**. The engine is `hw1/api.py` + [rdflib](https://rdflib.readthedocs.io/):
-plain Turtle files parsed into a single graph, validated, extended, and
-serialized back. Local SPARQL runs over those files for inspection and for
-personal selection policies; no service is required. Five subcommands
-(`reconstruct.py` is the sixth command of the suite):
+Use w/s to move, a/d to turn, c or Space to capture, and q or Escape to finish.
+The collector writes synchronized RGB, depth, GT poses, and intrinsics.json.
+Record the output directory, route, frame count, frame spacing, and collection
+settings in the submitted README.md. Do not submit Replica environment assets.
+Use --clean or uncertainties.enabled: false for a clean collection.
 
-| Command | Does | Writes |
-|---|---|---|
-| `api.py explore <capture-dir or .ttl>…` | read-only terminal tables; several files → comparison view | nothing |
-| `api.py declare --data-dir` | scaffold a declaration (prefixes, capture join, factor selection, PREDICTION TODOs); never assesses | `hw1/experiments/<name>.ttl` (refuses to overwrite) |
-| `api.py experiment <decl.ttl>` | assess one declaration, **once**, then seal | machine section of the same file |
-| `api.py query <file.ttl> --query-file <question.rq>` | run a student-authored local SPARQL query | nothing |
-| `reconstruct.py --experiment` | baseline + selected runs, outcomes into the sealed file | run nodes + diagnostics JSON |
+## Required Standard Track
 
-Everything the semantic layer computes — statuses, verdicts, attribution — is
-baked into the files at assessment time and read back with `explore`. The
-`.ttl` files *are* the state; version-control them like lab notes.
+Both phases use the same pipeline:
 
-Use `api.py query` whenever you want to inspect the RDF directly. For example,
-the shipped [`queries/usable_links.rq`](queries/usable_links.rq) shows the
-status rule that feeds reconstruction's selected-segment probe:
+1. **Depth unprojection:** for valid Z=D(u,v)/s, compute
+   X=(u-cx)Z/fx and Y=(v-cy)Z/fy. Zero depth is invalid and must not become a
+   point at the origin. Open3D projection helpers are not used for this step.
+2. **Voxelization:** downsample point clouds while retaining scene structure.
+3. **Global registration:** compute FPFH features and estimate the initial
+   transform with Open3D feature-based RANSAC.
+4. **Local registration:** refine the RANSAC result with Open3D ICP. The supplied
+   path uses point-to-plane ICP; point-to-point ICP is also allowed.
+5. **Map and trajectory:** transform and accumulate aligned clouds, compose the
+   estimated trajectory, visualize it, and record runtime and settings. The
+   reference CLI uses a 0.05 m voxel and Open3D RANSAC seed 0 unless overridden;
+   both are written to the run diagnostics sidecar.
 
-```bash
-pixi run -e habitat python hw1/api.py query hw1/experiments/my_first_test.ttl \
-  --query-file hw1/queries/usable_links.rq
-```
+GT poses are reference data for evaluation only, not registration input. Show the
+estimated trajectory in red and GT in black. Remove the ceiling when it blocks
+inspection.
 
-You can also make a personal frame assessment drive the selected reconstruction.
-Write a SPARQL `SELECT` that binds either `?frame` (a HW1 frame IRI) or
-`?frameIndex` (an integer), then pass it to reconstruction. Its result is
-validated against the experiment and split into contiguous temporal segments:
+The Standard Track is the required base implementation. The optional Bonus Track
+is my_local_icp_algorithm; it must not replace or break the Open3D path.
 
-```bash
-pixi run -e habitat python hw1/reconstruct.py \
-  --data_root eval/_data/first_floor/baseline \
-  --experiment hw1/experiments/my_first_test.ttl \
-  --selection-query hw1/queries/personal_passing_frames.rq --no-vis
-```
+## `utils.py` implementation checklist
 
-#### 4.2 The TBox: `hw1/ontology/hw1.ttl`
+`utils.py` currently contains **19 TODO markers across 15 functions**. Implement
+the following functions:
 
-The ontology file is the single source of truth for *names and defaults*. You
-read it (and `definitions.md`) to know what is declarable; you never edit it.
-It defines:
-
-**Factor definitions vs factor measurements** — the two levels share the word
-"factor" and must not be confused (see `DL.md` for the full logic):
-
-- `FactorDefinition` (IRI `hw1:QualityFactor`) is reusable and ownerless: what
-  a number means, which direction is better (`polarity`), which parameter holds
-  the threshold (`qualifiedBy`), and which images it applies to (`targetKind`).
-- `FactorMeasurement` (IRI `hw1:Factor`) is one experiment-scoped occurrence:
-  `inExperiment` + `hasDefinition` + `hasCurrentFrame` (plus `hasPrevious` for
-  pairs) + uniform `value` / `status` / `evaluationState`. New writers emit
-  `hw1:hasDefinition`; `hw1:factorType` is accepted as the same link for
-  compatibility. Shared Batch/Frame/image nodes never carry results.
-
-**The factor menu** — 8 selectable definitions, all computed from raw
-rasters (numpy + Pillow):
-
-| Factor | Observable | Polarity | Default threshold |
-|---|---|---|---|
-| `hw1:HighFrequencyDepthResidual` | `highFrequencyDepthResidual` (m) | lower-better | `maxHighFrequencyDepthResidual` 0.05 |
-| `hw1:FlyingPixelRatio` | `flyingPixelRatio` | lower-better | `maxFlyingPixelRatio` 0.05 |
-| `hw1:ValidTileCoverage` | `validTileCoverage` | higher-better | `minValidTileCoverage` 0.50 |
-| `hw1:HighlightClipping` (RGB) | `clipHiFraction` | lower-better | `maxClipHiFraction` 0.05 |
-| `hw1:ShadowClipping` (RGB) | `clipLoFraction` | lower-better | `maxClipLoFraction` 0.30 |
-| `hw1:IdentityMedianDepthChange` (pair) | `identityMedianDepthChange` (m) | lower-better | `maxIdentityMedianDepthChange` 0.20 |
-| `hw1:JointValidDepthRatio` (pair) | `jointValidDepthRatio` | higher-better | `minJointValidDepthRatio` 0.30 |
-| `hw1:PriorWarpDepthResidual` (pair) | `priorWarpDepthResidual` (m) | lower-better | `maxPriorWarpDepthResidual` 0.10 |
-
-Plus the statusless RGB baseline `hw1:meanValue` (always written, never Pass
-or Fail — the control your chosen factors are supposed to beat), and the two
-run-level factors that are always evaluated, never selected:
-`hw1:ReconstructionAccuracy` over `mapMeanL2` (`maxMapMeanL2` 0.80 m) and
-`hw1:Coverage` over `coverageF` (`minCoverageF` 0.40).
-
-**Completion, not qualification** — `hw1:FullEvaluatedFrames` is bound to the
-Experiment: it holds iff every expected measurement for that experiment's
-selection exists exactly once and is `Measured` with one numeric value and one
-correctly graded status. All values may Fail; Pending, missing, errored,
-wrong-modality, unexpected, or duplicate measurements block completion. The
-validator materializes or removes the type; production selection requires it,
-inspection may read incomplete graphs.
-
-**Parameters and their roles** — every settable number is a declared
-`hw1:Parameter` with a role that *is* the verdict vocabulary:
-
-| Role | Lives on | When attribution names it, the fix is |
-|---|---|---|
-| `GenerationSetting` | Batch | the pixels are bad → regenerate / re-drive the agent |
-| `MeasurementSetting` | Experiment | the observable was measured at a poor level → change the number, new experiment |
-| `QualificationSetting` | Experiment | the Pass line is mis-cut → change the threshold, new experiment |
-
-**The grading rule** — one rule for everything: higher-better passes iff
-`value >= threshold`, lower-better iff `value <= threshold`. A status is a
-cache; the raw value is always stored next to it, so any threshold debate can
-be re-litigated from the sealed file.
-
-#### 4.3 The experiment Turtle file — declaring qualification factors
-
-A declaration is the one piece of RDF you author. You do not start from a
-blank page — scaffold it:
-
-```bash
-pixi run -e habitat python hw1/api.py declare \
-  --name my_first_test \
-  --data-dir <capture-dir> \
-  --floor 1 \
-  --factor HighFrequencyDepthResidual
-```
-
-This writes `hw1/experiments/my_first_test.ttl` with the prefixes, the
-Experiment node (IRI tail = file stem, `hw1:onBatch` derived from `--floor`
-and the capture-directory basename), your factor selection (omit `--factor`
-and it selects the full menu for you to trim), the factor menu and override
-syntax as comments, and the PREDICTION block as TODOs. Everything in it stays
-yours to edit until assessment seals the file; it never overwrites an
-existing declaration.
-Minimal anatomy of what it scaffolds:
-
-```turtle
-# PREDICTION (write BEFORE assessing — the seal makes it non-retractable):
-#   input:    which frames/factors will fail, and why
-#   baseline: expected mapMeanL2 band and verdict
-#   selected: expected differential and the mechanism behind it
-
-@prefix hw1:  <http://taica.course/hw1/ontology#> .
-@prefix batch: <http://taica.course/hw1/data/batch/> .
-@prefix exp:   <http://taica.course/hw1/data/experiment/> .
-@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
-@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
-
-exp:my_first_test
-    a hw1:Experiment ;
-    hw1:schemaVersion "5.0.0" ;
-    rdfs:label "depth-glitch hypothesis, stock measurement, re-cut outcome line"@en ;
-    hw1:batchFile "<capture-dir>" ;
-    hw1:onBatch batch:floor1_<capture-name> ;
-    hw1:evaluatesFactor hw1:HighFrequencyDepthResidual .
-```
-
-Rules that bite: the file stem **must equal** the IRI tail
-(`my_first_test.ttl` ↔ `exp:my_first_test`, i.e.
-`http://taica.course/hw1/data/experiment/my_first_test` — naming your
-experimental conditions is part of designing them); `hw1:onBatch` must use the
-**data** namespace (`batch:floor<N>_<capture-dir-basename>`, i.e.
-`http://taica.course/hw1/data/batch/floor<N>_<capture-dir-basename>`)
-for the directory named in `hw1:batchFile` — the ontology namespace form is
-rejected as a capture mismatch; the selection is 1–8 menu factors.
-
-**Overriding a setting** — a `hw1:FactorSetting` blank node per override.
-Qualification example (tighten a factor's Pass line):
-
-```turtle
-    hw1:hasFactorSetting [
-        a hw1:FactorSetting ;
-        hw1:settingParameter hw1:maxHighFrequencyDepthResidual ;
-        hw1:settingRole hw1:QualificationSetting ;
-        hw1:settingForFactor hw1:HighFrequencyDepthResidual ;
-        hw1:settingValue "0.010"^^xsd:double
-    ] .
-```
-
-Measurement example (change how the observable is computed —
-e.g. `hw1:tauHi "245.0"` for HighlightClipping), and run-level example
-(re-cut the outcome line when your capture's clean floor supports it —
-`hw1:settingParameter hw1:maxMapMeanL2` with
-`hw1:settingForFactor hw1:ReconstructionAccuracy`). Everything you do not
-override is filled from TBox defaults *for the selected factors only*, and
-`explore` on the unassessed declaration previews the full setting vector —
-declared vs `WILL BE DEFAULTED` — before you commit:
-
-```bash
-pixi run -e habitat python hw1/api.py explore hw1/experiments/my_first_test.ttl
-```
-
-**Assess once, sealed forever:**
-
-```bash
-pixi run -e habitat python hw1/api.py experiment hw1/experiments/my_first_test.ttl
-```
-
-This measures the selection and writes one `hw1:Factor` measurement per
-expected occurrence (`inExperiment` + `hasDefinition` + image links + `value`
-/ `status` / `evaluationState`), plus per-frame annotations (per modality:
-values + statuses + a per-modality `qualificationStatus`) and frame pairs. It
-fills defaults, materializes `hw1:FullEvaluatedFrames` when every expected
-occurrence validates as `Measured`, and appends it all below a machine marker
-with a `declarationDigest` sealing the student section. Re-assessment is a
-hard error. To change anything, copy the student section to a new name.
-
-**Reconstruct — the control and the probe:**
-
-```bash
-pixi run -e habitat python hw1/reconstruct.py \
-  --experiment hw1/experiments/my_first_test.ttl \
-  --data_root <capture-dir> --no-vis
-```
-
-Two runs by default: `baseline` (every frame) and `selected` (maximal
-usable-link segments — a link is usable iff the pair passed and both endpoint
-frames passed). The selected run is a **falsification probe** of "the failed
-frames are harming ICP", not a promised repair. A personal `SELECT` query
-(`--selection-query`, binding `?frame` or `?frameIndex`; see
-`hw1/queries/personal_passing_frames.rq`) may override the verdict-driven
-selection for the selected run — it is validated against the experiment's
-frames and cut into contiguous segments. Both record `mapMeanL2` and
-`gatedSteps`; selected adds `spliceCount` and `maxGapLength`. Interpreting the
-differential:
-
-- baseline Fail, selected Pass → the rejected frames are load-bearing; the
-  verdicts found real damage;
-- baseline Pass, selected Fail → deletion/splicing caused the regression;
-- similar outcomes → the factors are not shown to bind the consumer at these
-  levels.
-
-**Worked reference** (in the tree, fully reproducible): the sealed experiment
-`hw1/experiments/first_floor_uniform_injected_v7.ttl` selects only
-`HighFrequencyDepthResidual` with `maxMapMeanL2` re-cut to 0.3, and shows the
-loop closing: HFD fails exactly the 10 defective frames (values ≈ 2.25 m vs a
-0.0054 m clean-side max), baseline 0.8679 **Fail**, selected 0.0353 **Pass**
-with `spliceCount 10, maxGapLength 1`. `explore` prints the whole verdict
-walk, ending at a Generation setting on the batch:
-
-```bash
-pixi run -e habitat python hw1/api.py explore hw1/experiments/first_floor_uniform_injected_v7.ttl
-```
-
-Vocabulary check (current writers): the sealed experiment
-`hw1/experiments/corrupted_verify_hasdef.ttl` over
-`eval/_data/first_floor/corrupted` emits `hw1:hasDefinition` on every Factor
-occurrence and materializes `hw1:FullEvaluatedFrames` — the shape new
-declarations must verify against.
-
-**Inspect visually** — the dashboard projects the same sealed files: factor
-timelines with thresholds, linked RGB/depth frame viewer, run outcomes with
-splice/gate evidence, settings with declared/defaulted source, and a notebook
-comparison table:
-
-```bash
-pixi run -e habitat python hw1/dashboard.py          # http://127.0.0.1:8765
-```
-
-### 5. What students implement
-
-Right now **everything ships as the reference implementation** so the whole
-flow can be tested (this document's purpose). Before handout, the functions
-below are carved to documented stubs; their docstring CONTRACT/SPEC blocks
-are the assignment. Everything else — the RDF engine, the CLI, sealing,
-explore, the dashboard — ships working and is off-limits.
-
-#### 5.1 `hw1/utils.py` — the reconstruction stack
-
-Functions marked `SHIPS WORKING` in their docstring stay (depth loading,
-preprocessing, FPFH/RANSAC, the Open3D ICP wrappers, frame reconciliation,
-`mean_l2`, visualisation helpers). The student pass targets:
-
-| Function | What is being learned |
+| Area | Functions |
 |---|---|
-| `depth_image_to_point_cloud` | the pinhole back-projection itself — Open3D's projection helpers are off-limits; validity masking (0 = no return, never a point at the origin) |
-| `my_local_icp_algorithm` | point-to-point ICP from scratch: cKDTree correspondences, Kabsch/Umeyama SVD with reflection fix, convergence handling |
-| `reconstruct` | the SLAM loop per its CONTRACT: frame streaming, constant-velocity init, the per-step plausibility gate, frame-0 anchoring, subsetting semantics |
+| RGB frame measurements | `frame_mean_value`, `frame_clip_hi_fraction`, `frame_clip_lo_fraction` |
+| Depth frame measurements | `frame_high_frequency_depth_residual`, `frame_flying_pixel_ratio`, `frame_valid_tile_coverage` |
+| Depth-pair measurements | `pair_identity_median_depth_change`, `pair_joint_valid_depth_ratio`, `pair_prior_warp_depth_residual` |
+| Depth and point-cloud preparation | `depth_image_to_point_cloud`, `preprocess_point_cloud` |
+| Registration backends | `local_icp_algorithm`, `my_local_icp_algorithm` (optional Bonus Track) |
+| Reconstruction pipeline | `reconstruct` (five TODO sections: cloud creation, preprocessing, initial registration, refinement, and pose/map update) |
+| Scoring and visualization | `visualize_and_evaluate` |
 
-Smoke fixture: `hw1/tests/fixtures/` ships five synthetic frames with exactly
-known clouds and a GT trajectory whose perfect `mean_l2` is 0.0 — it separates
-"my ICP is wrong" from "my loop is wrong" before any real capture is touched.
+The checklist count includes every `# TODO:` comment in the file. `reconstruct`
+has five TODO sections: cloud creation, preprocessing, initial registration,
+refinement, and pose/map update. Every other listed function has one TODO
+marker. `my_local_icp_algorithm` is optional and belongs to the Bonus Track;
+the other functions are part of the required implementation.
 
-#### 5.2 `hw1/api.py` — only the qualification-factor measurers
+## Mean L2 Distance
 
-Students implement **only the measurement functions** behind the factor menu —
-never the RDF machinery. The eight active measurers (plus their `_mask`
-variants where masks are exported):
+Report this required metric in metres for every reconstruction:
 
-| Function | Factor |
+~~~text
+MeanL2 = (1/N) * sum_i || estimated_position_i - GT_position_i ||_2
+~~~
+
+The first camera pose defines the reference frame. Transform estimated and GT
+positions into that common frame before comparison. Do not substitute RMSE, MAE,
+or a separately fitted alignment.
+
+The RDF support layer stores this metric under `hw1:mapMeanL2`, the implementation
+predicate for the trajectory Mean L2 Distance. It is a trajectory metric, not a
+point-cloud map metric. Reports and logs use the specification name, Mean L2
+Distance.
+
+## Data-verification vocabulary
+
+Use these terms consistently:
+
+| Term | Meaning |
 |---|---|
-| `frame_clip_hi_fraction` | HighlightClipping |
-| `frame_clip_lo_fraction` | ShadowClipping |
-| `frame_high_frequency_depth_residual` (+`_mask`) | HighFrequencyDepthResidual |
-| `frame_flying_pixel_ratio` (+`_mask`) | FlyingPixelRatio |
-| `frame_valid_tile_coverage` (+`_mask`) | ValidTileCoverage |
-| `pair_identity_median_depth_change` (+`_mask`) | IdentityMedianDepthChange |
-| `pair_joint_valid_depth_ratio` (+`_mask`) | JointValidDepthRatio |
-| `pair_prior_warp_depth_residual` (+`_mask`) | PriorWarpDepthResidual |
+| Batch | One capture directory and shared camera information |
+| Frame | One indexed RGB-D observation and pose, when available |
+| RGBImage / DepthImage | The color/depth raster for a frame |
+| RGBPair / DepthPair | Specification terms for two ordered observations inspected together |
+| FramePair (RDF) | Repository representation of one ordered adjacent-frame pair; depth-pair measurements link its two DepthImages |
+| Experiment | One named reconstruction/verification attempt on a batch |
+| FactorMeasurement | One numeric observation linked to its factor and source image or pair |
+| single-image factor | Measurement from one RGB or depth image |
+| depth-pair factor | Measurement from two ordered depth observations |
 
-Each has an exact contract (formula, units, validity rule, fail-closed
-sentinel) in its docstring and in `definitions.md`; the tests in
-`hw1/tests/test_factor_measurers.py` and
-`hw1/tests/test_factor_mask_pipeline.py` pin the expected behavior.
+The specification terms are mapped to the RDF implementation as follows:
 
-### Verify your setup end to end
+- `FactorMeasurement` is an experiment-scoped `hw1:Factor` occurrence linked
+  through `hw1:hasDefinition` to a reusable `hw1:QualityFactor` definition.
+- `RGBPair` and `DepthPair` are conceptual scopes. The RDF graph uses one
+  ordered `hw1:FramePair` with `hw1:sourceFrame` and `hw1:targetFrame`; a
+  depth-pair `hw1:Factor` occurrence links the ordered DepthImages through
+  `hw1:hasPrevious` and `hw1:hasCurrentFrame`.
+- A single-image factor is typed as `hw1:SingleImageFactor`; a depth-pair
+  factor is typed as `hw1:DepthPairFactor`.
 
-```bash
-pixi run -e habitat pytest hw1/tests/test_factor_measurers.py \
-  hw1/tests/test_factor_mask_pipeline.py hw1/tests/test_diagnostic_metrics.py -q
+No separate completion-frame class or pair alias is emitted.
 
-# reproduce the worked reference (deterministic — expect 0.8679 / 0.0353):
-pixi run -e habitat python hw1/reconstruct.py \
-  --experiment hw1/experiments/first_floor_uniform_injected_v7.ttl \
-  --data_root eval/first_floor_uniform_injected --baseline-only --no-vis
-pixi run -e habitat python hw1/reconstruct.py \
-  --experiment hw1/experiments/first_floor_uniform_injected_v7.ttl \
-  --data_root eval/first_floor_uniform_injected --selected-only --no-vis
-```
+Supported factors:
 
-| Symptom | Meaning |
+| Scope | Factor |
 |---|---|
-| declaration digest mismatch | student section edited after assessment; make a new experiment |
-| `experiment` refuses to run | file already sealed — that is the design, not a bug |
-| selected run much worse than baseline | real splice/gap effect; read `spliceCount`/`maxGapLength`/`gatedSteps` |
-| RGB factor fails, geometry unchanged | true input condition, not load-bearing for geometry-only ICP — say both in the report |
-| no Generation verdict on provided data | no generator level recorded on the batch; never invent one |
+| RGB frame | HighlightClipping, ShadowClipping |
+| depth frame | HighFrequencyDepthResidual, FlyingPixelRatio, ValidTileCoverage |
+| depth pair | IdentityMedianDepthChange, JointValidDepthRatio, PriorWarpDepthResidual |
+
+Record each value's scope, units or range, settings, source links, limitations,
+and failure cases. These measurements support interpretation; they do not
+alone prove causation.
+
+## Optional RDF evidence workflow
+
+api.py provides a local Turtle/rdflib evidence workflow; no server, triple store,
+named graph, or OWL reasoner is required:
+
+~~~bash
+pixi run -e habitat python api.py explore <capture-dir>
+pixi run -e habitat python api.py declare --name phase1_test --data-dir <capture-dir> --floor 1
+pixi run -e habitat python api.py experiment experiments/phase1_test.ttl
+pixi run -e habitat python reconstruct.py --data_root <capture-dir> --experiment experiments/phase1_test.ttl --no-vis
+pixi run -e habitat python api.py explore experiments/phase1_test.ttl
+~~~
+
+Assessed experiment files are write-once. Completion is derived from expected
+measurement occurrences and evaluationState; no completion RDF class is emitted.
+No separate completion-frame vocabulary is emitted.
+
+## Report and submission
+
+Submit exactly <student-id>_hw1.zip with no extra top-level directory:
+
+~~~text
+<student-id>_hw1.zip
+|-- load.py
+|-- reconstruct.py
+|-- utils.py
+|-- api.py
+|-- ontology/
+|   `-- hw1.ttl
+|-- report.pdf
+`-- README.md
+~~~
+
+The English PDF must include the complete pipeline and verification workflow,
+implementation issues and justifications, screenshots for both phases with
+red/black trajectories and ceiling removed when needed, and a comparison table
+with Mean L2 Distance, evaluated frame count, unit, total runtime, and tested
+hyperparameters. Include quality measurements, settings, source links,
+limitations, failure cases, their reconstruction relationship, and answers to:
+
+1. What happens when ICP runs without global RANSAC, and why?
+2. Which choices improved ICP stability?
+3. How did data quality and collection choices affect reconstruction and Mean L2?
+
+Include a custom-ICP comparison only if the optional Bonus Track is attempted.
+Do not include Replica assets, build artifacts, or an extra enclosing directory.
+
+## Verification
+
+~~~bash
+python -m py_compile api.py reconstruct.py load.py completeness.py utils.py packages/simulator/simulator/*.py
+git diff --check
+pixi run -e habitat pytest test_e2e.py -v
+env -u PYTHONPATH pixi run -e habitat python -m pytest packages/simulator/tests/ -v
+~~~
+
+The Habitat environment must be installed with the repository submodule before
+the Pixi commands can run successfully.

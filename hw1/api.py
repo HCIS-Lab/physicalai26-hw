@@ -12,24 +12,9 @@ from PIL import Image
 
 from rdflib import Graph, Literal, Namespace, RDF, RDFS, URIRef, XSD
 
-# =============================================================================
-# Namespaces  (must match ontology/hw1.ttl exactly — do not rename)
-#   §1 freezes this list. QUDT/UNIT/SKOS/PROV are not decoration:
-#   qudt:unit is what keeps "0.41" from being a unitless number nobody can check,
-#   skos: is what marks the four closed term vocabularies (Status, Polarity,
-#   SettingRole, SelectionMode) as vocabularies rather than classes of measurable
-#   things, and prov:wasDerivedFrom is the edge from a corrupted capture back to
-#   the capture it was made from — BETWEEN BATCHES, the only place it survives
-#   (§6: there are no derived experiments).
-#
-#   `dqv:` is deliberately absent (§1). It carried the v1 Result /
-#   Metric shape, which is gone: a hw1:QualityFactor is defined by its own four
-#   properties and a run outcome is an ordinary observable.
-# =============================================================================
 NS = "http://taica.course/hw1/ontology#"
-# Instance data uses a separate namespace from the ontology vocabulary. This
-# keeps v5 Turtle qnames legal and readable; legacy v4 IRIs remain under NS.
 DATA_NS = "http://taica.course/hw1/data/"
+EXP_NS = "http://taica.course/hw1/experiment/"
 HW1 = Namespace(NS)
 SCHEMA = Namespace("https://schema.org/")
 QUDT = Namespace("http://qudt.org/schema/qudt/")
@@ -39,440 +24,36 @@ PROV = Namespace("http://www.w3.org/ns/prov#")
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-# Path to hw1/ontology/hw1.ttl relative to this file (this file lives in hw1/).
-# It is the TBox, and it is also the AUTHORITY on which parameter and factor names
-# exist: see load_parameter_declarations / load_quality_factors.
 _ONTOLOGY_TTL = os.path.join(_HERE, "ontology", "hw1.ttl")
 
-# Where `experiment` writes (§3).
 _EXPERIMENT_DIR = os.path.join(_HERE, "experiments")
 
-# Depth PNG encoding: uint16 millimetres.
-_DEPTH_SCALE = 1000.0
+try:
+    from .utils import (
+        frame_mean_value,
+        frame_clip_hi_fraction,
+        frame_clip_lo_fraction,
+        frame_high_frequency_depth_residual,
+        frame_flying_pixel_ratio,
+        frame_valid_tile_coverage,
+        pair_identity_median_depth_change,
+        pair_joint_valid_depth_ratio,
+        pair_prior_warp_depth_residual,
+    )
+except ImportError:
+    from utils import (
+        frame_mean_value,
+        frame_clip_hi_fraction,
+        frame_clip_lo_fraction,
+        frame_high_frequency_depth_residual,
+        frame_flying_pixel_ratio,
+        frame_valid_tile_coverage,
+        pair_identity_median_depth_change,
+        pair_joint_valid_depth_ratio,
+        pair_prior_warp_depth_residual,
+    )
 
-# =============================================================================
-# Immerkaer noise-estimation constants — the measurement contract of
-# `frame_high_frequency_depth_residual`. FIXED: they are NOT yours to derive and
-# they are NOT Parameters. Unlike the tau pair they need no per-experiment
-# provenance, because they are not free parameters: they are the kernel and the
-# two constants of one published estimator, and changing one does not measure the
-# same quantity differently — it measures a different quantity. Read these names
-# in your measurer; do not paste the numbers inline.
-# =============================================================================
-# Immerkaer 1996's 3x3 mask: the difference of two discrete Laplacians, so it
-# annihilates any locally-linear depth surface and leaves the high-frequency
-# residual behind.
-_IMMERKAER_M = np.array([[1.0, -2.0, 1.0],
-                         [-2.0, 4.0, -2.0],
-                         [1.0, -2.0, 1.0]])
-# ||M|| = sqrt(sum(M^2)) = sqrt(36) = 6: the factor by which the mask amplifies
-# an i.i.d. noise standard deviation.
-_IMMERKAER_NORM = 6.0
-# Median of |N(0,1)| = Phi^-1(0.75). Converts a robust spread back to a sigma.
-_MAD_TO_SIGMA = 0.6745
 
-
-# =============================================================================
-# Per-frame observable measurers
-#   Every one of them is PURE and DETERMINISTIC: a path (plus parameters) in, one
-#   documented scalar out. No I/O beyond reading the frame, no global state, no
-#   randomness — that is what makes them autogradable and what makes a stored
-#   observable reproducible from the file it was measured from.
-# =============================================================================
-def _value_channel(rgb_path):
-    """V = max(R,G,B) per pixel, float64 HxW in [0,255]. Full contract: docs/factors.md."""
-    arr = np.asarray(Image.open(rgb_path).convert("RGB"), dtype=np.float64)
-    return arr.max(axis=2)
-
-
-def frame_mean_value(rgb_path):
-    """BASELINE (not a factor): mean of V over one RGB frame, [0,255]. Deliberately weak. Full contract: docs/factors.md."""
-    return float(_value_channel(rgb_path).mean())
-
-
-def frame_clip_hi_fraction(rgb_path, tau_hi):
-    """HighlightClipping: |{V >= tau_hi}| / N, LowerIsBetter, Pass iff <= maxClipHiFraction. tau_hi has no default. Full contract: docs/factors.md."""
-    V = _value_channel(rgb_path)
-    return float(np.count_nonzero(V >= tau_hi)) / float(V.size)
-
-
-def frame_clip_lo_fraction(rgb_path, tau_lo):
-    """ShadowClipping: |{V <= tau_lo}| / N, LowerIsBetter, Pass iff <= maxClipLoFraction. tau_lo has no default. Full contract: docs/factors.md."""
-    V = _value_channel(rgb_path)
-    return float(np.count_nonzero(V <= tau_lo)) / float(V.size)
-
-
-# =============================================================================
-# Depth-frame and pair observable measurers
-#   Same purity contract as the RGB measurers: path(s) (plus parameters) in, one
-#   documented scalar out — and, for every depth factor, a 0/255 drop mask too.
-#   numpy + Pillow only, no scipy, no point cloud, no pose (the one exception:
-#   PriorWarpDepthResidual receives the constant-velocity prior transform from
-#   the consumer, but still compares two RASTERS).
-#
-#   The pair measurers exist because frame factors cannot see the ONE thing that
-#   actually breaks frame-to-frame ICP: what happened BETWEEN two frames. A pair
-#   of individually perfect frames taken a metre apart registers no better than
-#   a pair of bad ones. Of the four literature drivers of pairwise ICP failure
-#   (semantic_layer_design.md §2.1) — D1 overlap, D2 initial misalignment /
-#   motion, D3 geometric degeneracy, D4 depth noise — the frame factors carry D4
-#   (HighFrequencyDepthResidual, FlyingPixelRatio) and per-frame coverage
-#   (ValidTileCoverage); the pair factors carry D1 (JointValidDepthRatio) and D2
-#   (IdentityMedianDepthChange, PriorWarpDepthResidual).
-# =============================================================================
-def _consumer_depth_metres_valid(depth_path):
-    """One uint16-mm depth raster as (metres, valid mask) under the consumer rule raw != 0."""
-    raw = np.asarray(Image.open(depth_path))
-    if raw.ndim != 2:
-        raise ValueError(f"depth raster must be two-dimensional, got {raw.shape}")
-    metres = raw.astype(np.float64) / _DEPTH_SCALE
-    return metres, raw != 0
-
-
-def _flag_mask(flagged):
-    """Boolean drop flags -> on-disk mask convention (uint8 0/255)."""
-    return np.where(flagged, np.uint8(255), np.uint8(0))
-
-
-def _fully_valid_3x3(valid):
-    if valid.shape[0] < 3 or valid.shape[1] < 3:
-        return np.zeros((0, 0), dtype=bool)
-    return (valid[:-2, :-2] & valid[:-2, 1:-1] & valid[:-2, 2:] &
-            valid[1:-1, :-2] & valid[1:-1, 1:-1] & valid[1:-1, 2:] &
-            valid[2:, :-2] & valid[2:, 1:-1] & valid[2:, 2:])
-
-
-def _high_frequency_depth_residual(depth_path, residual_mask_k):
-    """Shared scalar/mask core of HighFrequencyDepthResidual (Immerkaer, metres, LowerIsBetter). Full contract: docs/factors.md."""
-    metres, valid = _consumer_depth_metres_valid(depth_path)
-    flagged = np.zeros(valid.shape, dtype=bool)
-    windows = _fully_valid_3x3(valid)
-    if not windows.any():
-        return float("inf"), _flag_mask(flagged)
-
-    response = (metres[:-2, :-2] - 2.0 * metres[:-2, 1:-1] + metres[:-2, 2:] -
-                2.0 * metres[1:-1, :-2] + 4.0 * metres[1:-1, 1:-1] -
-                2.0 * metres[1:-1, 2:] + metres[2:, :-2] -
-                2.0 * metres[2:, 1:-1] + metres[2:, 2:])
-    absolute = np.abs(response)
-    contributing = absolute[windows]
-    median_abs = float(np.median(contributing))
-    value = median_abs / (_IMMERKAER_NORM * _MAD_TO_SIGMA)
-
-    k = float(residual_mask_k)
-    if not np.isfinite(k) or k < 0:
-        raise ValueError("residualMaskK must be a finite non-negative number")
-    # Quantised, perfectly planar input has median_abs == 0.  In that case a
-    # literal zero threshold would turn every real step edge into noise, so use
-    # one millimetre-response quantum as the minimum actionable residual.
-    threshold = max(k * median_abs, 1.0 / _DEPTH_SCALE)
-    centres = windows & (absolute > threshold)
-    flagged[1:-1, 1:-1] = centres
-    return value, _flag_mask(flagged)
-
-
-def frame_high_frequency_depth_residual(depth_path, residual_mask_k=5.0):
-    """Robust high-frequency depth residual in metres (LowerIsBetter). Student-implemented (README.md S5.2). Full contract: docs/factors.md."""
-    return _high_frequency_depth_residual(depth_path, residual_mask_k)[0]
-
-
-def frame_high_frequency_depth_residual_mask(depth_path, residual_mask_k=5.0):
-    """255 where HighFrequencyDepthResidual recommends dropping a pixel. Full contract: docs/factors.md."""
-    return _high_frequency_depth_residual(depth_path, residual_mask_k)[1]
-
-
-def _local_extrema(values, valid, radius):
-    """Window min/max without scipy; invalid samples never become extrema."""
-    h, w = values.shape
-    lo = np.full((h, w), np.inf, dtype=np.float64)
-    hi = np.full((h, w), -np.inf, dtype=np.float64)
-    padded_v = np.pad(values, radius, mode="edge")
-    padded_ok = np.pad(valid, radius, mode="constant", constant_values=False)
-    for dy in range(2 * radius + 1):
-        for dx in range(2 * radius + 1):
-            sample = padded_v[dy:dy + h, dx:dx + w]
-            ok = padded_ok[dy:dy + h, dx:dx + w]
-            lo = np.minimum(lo, np.where(ok, sample, np.inf))
-            hi = np.maximum(hi, np.where(ok, sample, -np.inf))
-    return lo, hi
-
-
-def _flying_pixel_ratio(depth_path, window, planarity_tol):
-    """Shared scalar/mask core of FlyingPixelRatio (fraction, LowerIsBetter). Full contract: docs/factors.md."""
-    metres, valid = _consumer_depth_metres_valid(depth_path)
-    flagged = np.zeros(valid.shape, dtype=bool)
-    if not valid.any():
-        return float("inf"), _flag_mask(flagged)
-
-    size = int(round(float(window)))
-    if size < 3 or size % 2 == 0:
-        raise ValueError("flyingPixelWindow must be an odd integer >= 3")
-    tol = float(planarity_tol)
-    if not np.isfinite(tol) or tol <= 0:
-        raise ValueError("flyingPixelPlanarityTol must be finite and > 0 metres")
-
-    radius = size // 2
-    local_lo, local_hi = _local_extrema(metres, valid, radius)
-    candidates = np.argwhere(valid & ((local_hi - local_lo) > 2.0 * tol))
-    h, w = valid.shape
-    for y, x in candidates:
-        y0, y1 = max(0, y - radius), min(h, y + radius + 1)
-        x0, x1 = max(0, x - radius), min(w, x + radius + 1)
-        ok = valid[y0:y1, x0:x1].copy()
-        ok[y - y0, x - x0] = False
-        yy, xx = np.nonzero(ok)
-        if len(yy) < 6:
-            continue
-        z = metres[y0:y1, x0:x1][ok]
-
-        # Split at the largest depth gap.  A real discontinuity supplies two
-        # locally planar populations; a mixed/flying centre belongs to neither.
-        order = np.argsort(z)
-        sorted_z = z[order]
-        gaps = np.diff(sorted_z)
-        if gaps.size == 0:
-            continue
-        split_at = int(np.argmax(gaps)) + 1
-        if gaps[split_at - 1] <= 2.0 * tol:
-            continue
-        low_idx, high_idx = order[:split_at], order[split_at:]
-        if len(low_idx) < 3 or len(high_idx) < 3:
-            continue
-
-        coords = np.column_stack([xx + x0 - x, yy + y0 - y,
-                                  np.ones(len(xx), dtype=np.float64)])
-        try:
-            low_plane = np.linalg.lstsq(coords[low_idx], z[low_idx], rcond=None)[0]
-            high_plane = np.linalg.lstsq(coords[high_idx], z[high_idx], rcond=None)[0]
-        except np.linalg.LinAlgError:
-            continue
-        low_pred = float(low_plane[2])
-        high_pred = float(high_plane[2])
-        if abs(high_pred - low_pred) <= 2.0 * tol:
-            continue
-        centre = float(metres[y, x])
-        if (min(low_pred, high_pred) - tol <= centre <=
-                max(low_pred, high_pred) + tol and
-                min(abs(centre - low_pred), abs(centre - high_pred)) > tol):
-            flagged[y, x] = True
-
-    return float(np.count_nonzero(flagged)) / float(flagged.size), _flag_mask(flagged)
-
-
-def frame_flying_pixel_ratio(depth_path, flying_pixel_window=5,
-                             flying_pixel_planarity_tol=0.03):
-    """Planar-fit-discriminated flying-pixel fraction (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _flying_pixel_ratio(
-        depth_path, flying_pixel_window, flying_pixel_planarity_tol)[0]
-
-
-def frame_flying_pixel_ratio_mask(depth_path, flying_pixel_window=5,
-                                  flying_pixel_planarity_tol=0.03):
-    """255 where FlyingPixelRatio recommends dropping a pixel. Full contract: docs/factors.md."""
-    return _flying_pixel_ratio(
-        depth_path, flying_pixel_window, flying_pixel_planarity_tol)[1]
-
-
-def _valid_tile_coverage(depth_path, tile_size, tile_valid_floor):
-    """Shared scalar/mask core of ValidTileCoverage (fraction, HigherIsBetter). Full contract: docs/factors.md."""
-    metres, valid = _consumer_depth_metres_valid(depth_path)
-    del metres
-    size = int(round(float(tile_size)))
-    if size <= 0:
-        raise ValueError("tileSize must be a positive integer")
-    floor = float(tile_valid_floor)
-    if not 0.0 <= floor <= 1.0:
-        raise ValueError("tileValidFloor must lie in [0, 1]")
-    flagged = np.zeros(valid.shape, dtype=bool)
-    h, w = valid.shape
-    total = supported = 0
-    for y0 in range(0, h, size):
-        for x0 in range(0, w, size):
-            tile = valid[y0:min(h, y0 + size), x0:min(w, x0 + size)]
-            total += 1
-            ok = bool(tile.size and float(np.mean(tile)) >= floor)
-            supported += int(ok)
-            if not ok:
-                flagged[y0:min(h, y0 + size), x0:min(w, x0 + size)] = True
-    value = 0.0 if total == 0 else float(supported) / float(total)
-    return value, _flag_mask(flagged)
-
-
-def frame_valid_tile_coverage(depth_path, tile_size=64, tile_valid_floor=0.5):
-    """Supported-tile fraction (HigherIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _valid_tile_coverage(depth_path, tile_size, tile_valid_floor)[0]
-
-
-def frame_valid_tile_coverage_mask(depth_path, tile_size=64,
-                                   tile_valid_floor=0.5):
-    """255 over every tile below the valid-return floor. Full contract: docs/factors.md."""
-    return _valid_tile_coverage(depth_path, tile_size, tile_valid_floor)[1]
-
-
-def _identity_median_depth_change(d0_path, d1_path, change_mask_k):
-    """Shared scalar/mask/count core of IdentityMedianDepthChange (metres, LowerIsBetter). Full contract: docs/factors.md."""
-    d0, v0 = _consumer_depth_metres_valid(d0_path)
-    d1, v1 = _consumer_depth_metres_valid(d1_path)
-    flagged = np.zeros(d0.shape, dtype=bool)
-    if d0.shape != d1.shape:
-        return float("inf"), _flag_mask(flagged), 0
-    joint = v0 & v1
-    count = int(np.count_nonzero(joint))
-    if count == 0:
-        return float("inf"), _flag_mask(flagged), 0
-    change = np.abs(d0 - d1)
-    values = change[joint]
-    median = float(np.median(values))
-    mad = float(np.median(np.abs(values - median)))
-    k = float(change_mask_k)
-    if not np.isfinite(k) or k < 0:
-        raise ValueError("changeMaskK must be a finite non-negative number")
-    threshold = median + k * 1.4826 * mad
-    # With a zero MAD, keep ordinary coherent motion and flag only values that
-    # exceed the median by at least one quantisation step.
-    threshold = max(threshold, median + 1.0 / _DEPTH_SCALE)
-    flagged = joint & (change > threshold)
-    return median, _flag_mask(flagged), count
-
-
-def pair_identity_median_depth_change(d0_path, d1_path, change_mask_k=3.0):
-    """Median |D0-D1| at identity in metres (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _identity_median_depth_change(d0_path, d1_path, change_mask_k)[0]
-
-
-def pair_identity_median_depth_change_mask(d0_path, d1_path, change_mask_k=3.0):
-    """255 where IdentityMedianDepthChange recommends dropping a pixel. Full contract: docs/factors.md."""
-    return _identity_median_depth_change(d0_path, d1_path, change_mask_k)[1]
-
-
-def _joint_valid_depth_ratio(d0_path, d1_path):
-    """Shared scalar/mask/count core of JointValidDepthRatio ([0,1], HigherIsBetter). Full contract: docs/factors.md."""
-    d0, v0 = _consumer_depth_metres_valid(d0_path)
-    d1, v1 = _consumer_depth_metres_valid(d1_path)
-    flagged = np.ones(d0.shape, dtype=bool)
-    if d0.shape != d1.shape or d0.size == 0:
-        return 0.0, _flag_mask(flagged), 0
-    joint = v0 & v1
-    count = int(np.count_nonzero(joint))
-    return float(count) / float(joint.size), _flag_mask(~joint), count
-
-
-def pair_joint_valid_depth_ratio(d0_path, d1_path):
-    """Jointly-valid depth fraction in [0,1] (HigherIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _joint_valid_depth_ratio(d0_path, d1_path)[0]
-
-
-def pair_joint_valid_depth_ratio_mask(d0_path, d1_path):
-    """255 where a pixel is NOT valid in both frames. Full contract: docs/factors.md."""
-    return _joint_valid_depth_ratio(d0_path, d1_path)[1]
-
-
-def _camera_intrinsics(intrinsics, shape):
-    """Accept the capture dict, a (width,height,hfov) tuple, or a 3x3 K."""
-    h, w = shape
-    arr = np.asarray(intrinsics) if not isinstance(intrinsics, dict) else None
-    if arr is not None and arr.shape == (3, 3):
-        return float(arr[0, 0]), float(arr[1, 1]), float(arr[0, 2]), float(arr[1, 2])
-    if isinstance(intrinsics, dict):
-        width = int(intrinsics["width"])
-        height = int(intrinsics["height"])
-        hfov = float(intrinsics["hfov"])
-    else:
-        width, height, hfov = intrinsics
-        width, height, hfov = int(width), int(height), float(hfov)
-    if (height, width) != (h, w):
-        raise ValueError(
-            f"intrinsics ({width}x{height}) do not match depth raster ({w}x{h})")
-    fx = fy = (width / 2.0) / np.tan(np.radians(hfov / 2.0))
-    return fx, fy, width / 2.0, height / 2.0
-
-
-def _prior_warp(d0_m, d1_m, prior_T, intrinsics, depth_gate):
-    """Warp depth-0 pixels into depth 1; residual/support/projected rasters at source coordinates. Full contract: docs/factors.md."""
-    d0 = np.asarray(d0_m, dtype=np.float64)
-    d1 = np.asarray(d1_m, dtype=np.float64)
-    if d0.shape != d1.shape or d0.ndim != 2:
-        raise ValueError("prior-warp depth rasters must be same-shape HxW arrays")
-    gate = float(depth_gate)
-    if not np.isfinite(gate) or gate <= 0:
-        raise ValueError("priorWarpDepthGate must be finite and > 0 metres")
-    fx, fy, cx, cy = _camera_intrinsics(intrinsics, d0.shape)
-    transform = np.asarray(prior_T, dtype=np.float64)
-    if transform.shape != (4, 4) or not np.isfinite(transform).all():
-        raise ValueError("prior_T must be a finite 4x4 transform")
-
-    source_valid = d0 > 0
-    y, x = np.nonzero(source_valid)
-    residual = np.full(d0.shape, np.nan, dtype=np.float64)
-    support = np.zeros(d0.shape, dtype=bool)
-    projected = np.zeros(d0.shape, dtype=bool)
-    if len(x) == 0:
-        return residual, support, projected
-
-    z = d0[y, x]
-    xyz1 = np.vstack([(x - cx) * z / fx, (y - cy) * z / fy, z,
-                      np.ones(len(z), dtype=np.float64)])
-    warped = transform @ xyz1
-    wz = warped[2]
-    in_front = wz > 0
-    u = np.rint(fx * warped[0] / np.where(in_front, wz, 1.0) + cx).astype(int)
-    v = np.rint(fy * warped[1] / np.where(in_front, wz, 1.0) + cy).astype(int)
-    h, w = d0.shape
-    inside = in_front & (u >= 0) & (u < w) & (v >= 0) & (v < h)
-    src_y, src_x = y[inside], x[inside]
-    dst_y, dst_x = v[inside], u[inside]
-    warped_z = wz[inside]
-    target_z = d1[dst_y, dst_x]
-    target_valid = target_z > 0
-    src_y, src_x = src_y[target_valid], src_x[target_valid]
-    warped_z, target_z = warped_z[target_valid], target_z[target_valid]
-    if len(src_x) == 0:
-        return residual, support, projected
-
-    r = np.abs(warped_z - target_z)
-    projected[src_y, src_x] = True
-    residual[src_y, src_x] = r
-    # A point substantially behind the observed surface is occluded and is not
-    # evidence about the prior residual distribution.  Points in front remain
-    # contributing outliers and are exactly the ones the filter can remove.
-    visible = warped_z <= target_z + gate
-    support[src_y[visible], src_x[visible]] = True
-    return residual, support, projected
-
-
-def _prior_warp_depth_residual(d0_path, d1_path, prior_T, intrinsics, depth_gate):
-    """Shared scalar/mask/count core of PriorWarpDepthResidual (metres, LowerIsBetter). Full contract: docs/factors.md."""
-    d0, _ = _consumer_depth_metres_valid(d0_path)
-    d1, _ = _consumer_depth_metres_valid(d1_path)
-    if d0.shape != d1.shape:
-        return float("inf"), _flag_mask(np.zeros(d0.shape, dtype=bool)), 0
-    residual, support, projected = _prior_warp(
-        d0, d1, prior_T, intrinsics, depth_gate)
-    count = int(np.count_nonzero(support))
-    if count == 0:
-        return float("inf"), _flag_mask(np.zeros(d0.shape, dtype=bool)), 0
-    value = float(np.median(residual[support]))
-    flagged = projected & np.isfinite(residual) & (residual > float(depth_gate))
-    return value, _flag_mask(flagged), count
-
-
-def pair_prior_warp_depth_residual(d0_path, d1_path, prior_T, intrinsics,
-                                   prior_warp_depth_gate=0.10):
-    """Median residual under the constant-velocity prior (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _prior_warp_depth_residual(
-        d0_path, d1_path, prior_T, intrinsics, prior_warp_depth_gate)[0]
-
-
-def pair_prior_warp_depth_residual_mask(d0_path, d1_path, prior_T, intrinsics,
-                                        prior_warp_depth_gate=0.10):
-    """255 where the prior-warp residual exceeds the depth gate. Full contract: docs/factors.md."""
-    return _prior_warp_depth_residual(
-        d0_path, d1_path, prior_T, intrinsics, prior_warp_depth_gate)[1]
-
-
-# =============================================================================
-# Frame pairing  (rgb/*.png <-> depth/*.png by integer stem, iterate sorted by int)
-# =============================================================================
 def _stem(path):
     """Integer filename stem of a frame path ('.../17.png' -> 17)."""
     return int(os.path.splitext(os.path.basename(path))[0])
@@ -493,37 +74,8 @@ def _pair_frames(data_dir):
     return [(str(s), rgb[s], depth[s]) for s in common]
 
 
-# =============================================================================
-# IRI helpers — the frozen scheme of §2, in ONE place
-#   Every module that needs an IRI of this assignment calls a function from this
-#   section. Nobody, in any file, writes an f-string with `batch/` in it, and
-#   nobody writes `str(iri).split("/")[-1]`: the scheme is a contract between
-#   `batch2ttl` (which mints the structural IRIs), `experiment` (which measures
-#   those subjects) and `reconstruct.py` (which reads them back), and a contract
-#   duplicated across three files is a contract that will disagree with itself the
-#   first time anyone renames a segment.
-#
-#   TWO TIERS, AND THE RULE THAT MUST NEVER BE RELAXED (§2).
-#   Batch, frame and image IRIs are SHARED STRUCTURE: they name pixels on disk, so
-#   every experiment over one capture reaches the same nodes. Everything an
-#   experiment mints — settings, annotations, pairs, runs — is EXPERIMENT-SCOPED,
-#   i.e. hangs under `<ns>experiment/<expname>/`. That scoping is what replaced v1's
-#   named graphs: two experiments over one batch produce two disjoint annotation /
-#   pair / run sets over the SAME frame IRIs, so nothing collides and nothing is
-#   overwritten. A loader can forget a `to_graph` argument; it cannot forget the
-#   experiment name, because the name is inside the subject.
-# =============================================================================
-
-# The two modality segments of an annotation IRI and of `component_iri` — frozen
-# (§2). They are the SAME two strings on purpose: an annotation's
-# `<kind>` names the image node it describes, so `annotation_iri(name, n, kind)`
-# and `component_iri(batch, n, kind)` line up segment for segment.
 _ANNOTATION_KINDS = ("rgb", "depth")
 
-# An experiment name is the declaration file's stem AND the IRI tail (§2/§6), so
-# it has to survive both a filesystem and an IRI without quoting: letters, digits,
-# underscore and hyphen. A name with a slash in it would silently restructure the
-# IRI scheme; a name with a space in it would not survive a Turtle IRI at all.
 _EXPNAME_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
 
@@ -577,21 +129,33 @@ def data_component_iri(name, idx, kind):
 
 
 def data_experiment_iri(expname):
-    return URIRef(f"{DATA_NS}experiment/{expname}")
+    return URIRef(f"{EXP_NS}{expname}")
 
 
 def data_setting_iri(expname, factor_local, param_local):
-    return URIRef(f"{DATA_NS}experiment/{expname}/setting/{factor_local}_{param_local}")
+    return URIRef(f"{EXP_NS}{expname}/setting/{factor_local}_{param_local}")
 
 
 def data_run_iri(expname, mode):
-    return URIRef(f"{DATA_NS}experiment/{expname}/run/{mode}")
+    return URIRef(f"{EXP_NS}{expname}/run/{mode}")
 
 
 def data_factor_iri(expname, factor_local, current_idx, previous_idx=None):
     local = (f"{factor_local}_{int(previous_idx)}_{int(current_idx)}"
              if previous_idx is not None else f"{factor_local}_{int(current_idx)}")
-    return URIRef(f"{DATA_NS}experiment/{expname}/factor/{local}")
+    return URIRef(f"{EXP_NS}{expname}/factor/{local}")
+
+
+def data_annotation_iri(expname, idx, kind):
+    """v5 per-modality annotation IRI in the data namespace."""
+    if kind not in _ANNOTATION_KINDS:
+        raise ValueError(f"unknown annotation kind {kind!r}")
+    return URIRef(f"{EXP_NS}{expname}/annotation/{kind}_{int(idx)}")
+
+
+def data_pair_iri(expname, i, j):
+    """v5 ordered frame-pair IRI in the data namespace."""
+    return URIRef(f"{EXP_NS}{expname}/pair/{int(i)}_{int(j)}")
 
 
 def annotation_iri(expname, idx, kind):
@@ -600,7 +164,7 @@ def annotation_iri(expname, idx, kind):
         raise ValueError(
             f"annotation kind {kind!r} is not one of {', '.join(_ANNOTATION_KINDS)}; "
             f"the <kind> segment of an annotation IRI is frozen (§2)")
-    return URIRef(f"{NS}experiment/{expname}/annotation/{idx}/{kind}")
+    return URIRef(f"{NS}experiment/{expname}/annotation/{kind}_{idx}")
 
 
 def pair_iri(expname, i, j):
@@ -632,11 +196,16 @@ def frame_index_from_iri(iri):
     text = str(iri)
     expected = (f"{NS}batch/<name>/frame/<n> or "
                 f"{DATA_NS}batch/<name>/frame/<n> or "
-                f"{NS}experiment/<expname>/annotation/<n>/<kind>")
+                f"{EXP_NS}<expname>/annotation/<kind>_<n>")
     if (text.startswith(f"{NS}batch/") or text.startswith(f"{DATA_NS}batch/")) and "/frame/" in text:
         tail = text.split("/frame/", 1)[1]
-    elif (text.startswith(f"{NS}experiment/") or text.startswith(f"{DATA_NS}experiment/")) and "/annotation/" in text:
-        tail, _, kind = text.split("/annotation/", 1)[1].partition("/")
+    elif (text.startswith(f"{NS}experiment/") or text.startswith(EXP_NS)) and "/annotation/" in text:
+        annotation_tail = text.split("/annotation/", 1)[1]
+        kind, separator, tail = annotation_tail.partition("_")
+        if not separator:
+            raise ValueError(
+                f"annotation IRI {text!r} does not use <kind>_<n> notation "
+                f"({expected})")
         if kind not in _ANNOTATION_KINDS:
             raise ValueError(
                 f"annotation IRI {text!r} ends in modality segment {kind!r}; "
@@ -682,11 +251,11 @@ def _experiment_name_from_iri(iri, path=None):
     """Experiment IRI -> <expname>, validated against _EXPNAME_RE. Full strategy note: docs/triplestore.md."""
     text = str(iri)
     prefix = f"{NS}experiment/"
-    data_prefix = f"{DATA_NS}experiment/"
+    data_prefix = EXP_NS
     where = f"{path}: " if path else ""
     if not (text.startswith(prefix) or text.startswith(data_prefix)):
         raise ValueError(f"{where}not an experiment IRI of this assignment: {text!r} "
-                         f"(expected {NS}experiment/<expname>)")
+                         f"(expected {EXP_NS}<expname>)")
     base = prefix if text.startswith(prefix) else data_prefix
     name = text[len(base):]
     if not _EXPNAME_RE.match(name):
@@ -697,39 +266,10 @@ def _experiment_name_from_iri(iri, path=None):
     return name
 
 
-# Backwards-compatible aliases. The two helpers were private (`_frame_iri`,
-# `_component_iri`) while this file was the only caller; §9 makes
-# them public because reconstruct.py and the tests import them. The old names
-# stay bound so nothing that already imports them breaks on the rename.
-_frame_iri = frame_iri
-_component_iri = component_iri
-
-
-# =============================================================================
-# The TBox as the authority on names
-#   Parameter names, factor names, polarities and thresholds are NOT string
-#   constants in this file. They are read out of ontology/hw1.ttl at run time, so
-#   the ontology is a thing the code OBEYS rather than a document that describes
-#   it. That is the whole argument for having a TBox in a pipeline this small:
-#   a declared `hw1:settingParameter hw1:tuaHi` is a hard error with the declared
-#   list printed, not a seventeenth FactorSetting nobody ever reads recording a
-#   treatment nobody ran.
-#
-#   Three loaders, one status rule: `load_parameter_declarations` (what may be
-#   set, and how it parses), `load_quality_factors` (what is measured, which way
-#   is better, and which parameter is its threshold) and `status_for` (the ONE
-#   implementation of the §4.5 Pass rule — `experiment` calls it for
-#   frame and pair observables, `write_run` for mapMeanL2 and coverageF, and
-#   nobody anywhere re-derives `>=` versus `<=`).
-# =============================================================================
+# TBox loaders: parameter/factor names come from ontology/hw1.ttl at runtime.
 _SETTING_ROLES = ("GenerationSetting", "MeasurementSetting", "QualificationSetting")
 _VALUE_KINDS = ("double", "integer", "string")
 
-# The two roles a setting may have ON AN EXPERIMENT, and therefore the two roles
-# the selection-scoped completeness rule of §4.2 draws from. Generation
-# is deliberately absent: those settings live on the Batch, they describe the pixels,
-# and they are never defaulted — see `_resolve_generation_settings` and
-# `read_declaration`, which rejects a Generation parameter in a declaration outright.
 _EXPERIMENT_ROLES = ("MeasurementSetting", "QualificationSetting")
 
 
@@ -863,15 +403,15 @@ def load_quality_factors(path=_ONTOLOGY_TTL):
         qual = g.value(f, HW1.qualifiedBy)
         # Semantic schema uses generic hw1:value/hw1:status on occurrences.
         # Keep the internal observable key for measurement dispatch and grading;
-        # it is no longer serialized as a per-metric RDF predicate.
+        # it is not serialized as a per-metric RDF predicate.
         semantic = over is None and status is None and local in (
             set(_FRAME_OBSERVABLES) | set(_PAIR_OBSERVABLES) |
             {"HighlightClipping", "ShadowClipping", "HighFrequencyDepthResidual",
              "FlyingPixelRatio", "ValidTileCoverage", "IdentityMedianDepthChange",
              "JointValidDepthRatio", "PriorWarpDepthResidual"})
-        # Run-level definitions may also adopt generic result predicates.  They
-        # are retained for write_run compatibility, so use their own local name
-        # as the internal observable key when the new TBox omits legacy links.
+        # Run-level definitions may also adopt generic result predicates. Use
+        # their local name as the internal observable key when the TBox omits
+        # per-observable links.
         if over is None and status is None and _semantic_schema_enabled(path):
             semantic = True
         if semantic:
@@ -935,33 +475,8 @@ def status_for(value_property_local, value, settings, factors=None):
     return HW1.Pass if passing else HW1.Fail
 
 
-# =============================================================================
-# Experiment files — two sections, one marker, one seal  (§3.1)
-#   An experiment file is not machine-generated any more. It is a STUDENT
-#   DECLARATION with a machine section appended to it:
-#
-#       <student turtle: Experiment node, factor selection, settings>
-#       # ============ MACHINE SECTION (regenerated by api.py — do not edit) ===
-#       <machine turtle: default-filled settings, annotations, pairs, runs>
-#
-#   Three writers/readers touch that structure and they have to agree to the
-#   byte: `cmd_experiment` appends the marker and stamps the seal,
-#   `read_experiment` verifies it, `write_run` verifies it and re-serializes the
-#   half below the marker. That is why the split and the digest live HERE, once,
-#   and why none of them does its own `text.find(...)`.
-#
-#   v2's DIGEST IDENTITY IS DELETED (§6/§11) — `experiment_digest`,
-#   `hw1:experimentId`, `--exp-id` and the `<id>.ttl` filenames with it. An
-#   experiment is identified by its NAME now, and what the digest used to buy —
-#   "one treatment, one file, nothing overwritten" — is bought by write-once plus
-#   the seal below, which is a stronger guarantee: it survives hand editing.
-# =============================================================================
-
-# The frozen marker line (§3.1), exported as part of the public
-# surface (§8) because the tests and `explore` split files on it too. Matched as
-# a WHOLE LINE, em dash and all: a "close enough" spelling would either cut a
-# file at a line that is not the marker, or fail to find the marker and report a
-# sealed experiment as an unassessed declaration.
+# Experiment file = student declaration + machine section, split at MACHINE_MARKER
+# and sealed by the declaration digest.
 MACHINE_MARKER = "# ============ MACHINE SECTION (regenerated by api.py — do not edit) ============"
 
 
@@ -1022,27 +537,7 @@ def _verify_seal(g, exp, student_text, path):
             f"<newname>.ttl` (§3.1 — experiments are write-once).")
 
 
-# =============================================================================
-# Experiment files — the ONE reader and the ONE writer of run triples
-#   `read_experiment` (§8.2) is the only code in the project that
-#   turns an ASSESSED experiment Turtle into Python, and `write_run` (§8.2) is the
-#   only code that emits a hw1:ReconstructionRun triple. reconstruct.py,
-#   completeness.py and any other evaluator go through these two: none of them
-#   parses Turtle, none of them re-derives the IRI scheme, none of them re-derives
-#   the usable-link rule of §4.5, and none of them re-derives the Pass/Fail rule
-#   (that one lives in `status_for`, and `write_run` calls it).
-#
-#   BOTH VERIFY THE SEAL FIRST (§3.1, new in v3), and `write_run`
-#   rewrites ONLY below the marker. `read_declaration` — further down, with the
-#   `experiment` command — is the reader for the other half of the file: the
-#   student's declaration, before any of this exists.
-#
-#   v1's `write_result` / `hw1:Result` / `load_result_measures` shape is DELETED
-#   (§11). A reconstruction outcome is now an ordinary observable —
-#   `hw1:mapMeanL2` + `hw1:mapMeanL2Status` on a hw1:ReconstructionRun, graded by
-#   the ordinary hw1:ReconstructionAccuracy factor — so nothing in this section
-#   is special-cased for results any more.
-# =============================================================================
+# read_experiment / write_run: sole reader/writer of run triples.
 def _sole_experiment(g, path):
     """Exactly one Experiment subject per file, else error. Full strategy note: docs/triplestore.md."""
     exps = sorted(set(g.subjects(RDF.type, HW1.Experiment)), key=str)
@@ -1174,13 +669,173 @@ def usable_links_from_query(graph, exp_iri):
     return [link for _, link in selected]
 
 
+def frames_from_sparql_query(exp, query_path):
+    """Frame stems selected by a student SPARQL query over an experiment.
+
+    CLI entry: ``--sparql-query <file.rq>`` (requires ``--experiment``).
+    Runs the query against the assessed experiment graph, binds ``?frame``
+    (a frame IRI) or ``?frameIndex`` (an integer), constrains results to
+    frames known to this experiment, and returns the sorted stem list to
+    feed to ``utils.reconstruct(..., frames=[...])``. Callers cut the flat
+    list into contiguous segments before reconstructing.
+    """
+    with open(query_path, "r", encoding="utf-8") as handle:
+        query_text = handle.read()
+    result = query_graph(exp["graph"], query_text)
+    if getattr(result, "type", "SELECT") != "SELECT":
+        raise ValueError("--sparql-query must be a SPARQL SELECT query that binds "
+                         "?frame or ?frameIndex")
+    names = {str(var): var for var in result.vars}
+    frame_var = names.get("frame")
+    index_var = names.get("frameIndex")
+    if frame_var is None and index_var is None:
+        raise ValueError("--sparql-query must bind ?frame (a frame IRI) or "
+                         "?frameIndex (an integer)")
+    selected = set()
+    for row in result:
+        from_frame = None if frame_var is None else row[frame_var]
+        from_index = None if index_var is None else row[index_var]
+        if from_frame is None and from_index is None:
+            continue
+        try:
+            frame = (frame_index_from_iri(from_frame) if from_frame is not None
+                     else int(from_index))
+        except (TypeError, ValueError) as exc:
+            raise ValueError("--sparql-query returned an invalid ?frame or "
+                             f"?frameIndex: {from_frame!r}, {from_index!r}") from exc
+        if from_frame is not None and from_index is not None:
+            try:
+                if frame != int(from_index):
+                    raise ValueError("disagreeing ?frame and ?frameIndex")
+            except (TypeError, ValueError) as exc:
+                raise ValueError("--sparql-query returned a non-integer ?frameIndex: "
+                                 f"{from_index!r}") from exc
+        selected.add(frame)
+    graph = exp["graph"]
+    known = {
+        int(index)
+        for frame in graph.objects(exp["batch_iri"], HW1.hasFrame)
+        for index in (graph.value(frame, HW1.frameIndex),)
+        if index is not None
+    }
+    unknown = sorted(selected - known)
+    if unknown:
+        raise ValueError("--sparql-query selected frame index/indices not present in "
+                         f"this experiment: {', '.join(map(str, unknown))}")
+    return sorted(selected)
+
+
+def _semantic_occurrence_report(g, exp, b, path):
+    """Validate v5 Factor occurrences and derive assessment completeness.
+
+    Completeness is intentionally a Python-side closed-world check. RDF graphs
+    do not express the absence of an expected occurrence, and serializing a
+    second completion type would create stale metadata when deferred evidence
+    is written back.
+    """
+    factors = load_quality_factors()
+    selected = sorted({_local(x) for x in g.objects(exp, HW1.evaluatesFactor)})
+    frames = []
+    for frame in g.objects(b, HW1.hasFrame):
+        idx = g.value(frame, HW1.frameIndex)
+        rgb = g.value(frame, HW1.hasRGBImage)
+        depth = g.value(frame, HW1.hasDepthImage)
+        if idx is None or rgb is None or depth is None:
+            raise ValueError(
+                f"{path}: every Batch Frame needs frameIndex, RGBImage and DepthImage")
+        frames.append((int(idx), frame, rgb, depth))
+    frames.sort(key=lambda row: row[0])
+    memberships = {
+        image: (idx, kind)
+        for idx, _frame, rgb, depth in frames
+        for image, kind in ((rgb, "rgb"), (depth, "depth"))
+    }
+
+    expected = {}
+    for factor_local in selected:
+        info = factors.get(factor_local)
+        if info is None:
+            raise ValueError(f"{path}: selected factor {factor_local!r} is not in the TBox")
+        over = info["over"]
+        if over in _FRAME_OBSERVABLES:
+            kind = _FRAME_OBSERVABLES[over]["modality"]
+            for idx, _frame, rgb, depth in frames:
+                image = rgb if kind == "rgb" else depth
+                expected[(factor_local, image, None)] = (idx, None)
+        elif over in _PAIR_OBSERVABLES:
+            for (i, _fi, _rgb0, d0), (j, _fj, _rgb1, d1) in zip(frames, frames[1:]):
+                expected[(factor_local, d1, d0)] = (i, j)
+
+    seen = {}
+    errors = []
+    measured = 0
+    pending = 0
+    occurrences = list(g.subjects(HW1.inExperiment, exp))
+    for node in occurrences:
+        definitions = list(g.objects(node, HW1.hasDefinition))
+        if len(definitions) != 1:
+            errors.append(f"{node}: expected exactly one hw1:hasDefinition")
+            continue
+        factor_local = _local(definitions[0])
+        current = list(g.objects(node, HW1.hasCurrentFrame))
+        previous = list(g.objects(node, HW1.hasPrevious))
+        if len(current) != 1:
+            errors.append(f"{node}: expected exactly one hw1:hasCurrentFrame")
+            continue
+        if len(previous) > 1:
+            errors.append(f"{node}: expected at most one hw1:hasPrevious")
+            continue
+        current = current[0]
+        previous = previous[0] if previous else None
+        if current not in memberships or (previous is not None and previous not in memberships):
+            errors.append(f"{node}: image link is outside the declared Batch")
+            continue
+        key = (factor_local, current, previous)
+        if key not in expected:
+            errors.append(f"{node}: unexpected factor/frame occurrence")
+        elif key in seen:
+            errors.append(f"{node}: duplicate occurrence for {key[0]}")
+        else:
+            seen[key] = node
+
+        states = list(g.objects(node, HW1.evaluationState))
+        if len(states) != 1 or states[0] not in (HW1.Pending, HW1.Measured):
+            errors.append(f"{node}: evaluationState must be exactly Pending or Measured")
+            continue
+        values = list(g.objects(node, HW1.value))
+        statuses = list(g.objects(node, HW1.status))
+        if states[0] == HW1.Measured:
+            try:
+                if len(values) != 1 or len(statuses) != 1:
+                    raise ValueError
+                float(values[0])
+                if statuses[0] not in (HW1.Pass, HW1.Fail):
+                    raise ValueError
+            except (TypeError, ValueError):
+                errors.append(f"{node}: Measured occurrences need one numeric value and Pass/Fail status")
+            else:
+                measured += 1
+        elif values or statuses:
+            errors.append(f"{node}: Pending occurrences must not carry value or status")
+            pending += 1
+        else:
+            pending += 1
+
+    missing = sorted(set(expected) - set(seen), key=str)
+    errors.extend(f"missing expected occurrence for {key[0]}" for key in missing)
+    complete = bool(expected) and not errors and measured == len(expected)
+    return {
+        "complete": complete,
+        "expected": len(expected),
+        "measured": measured,
+        "pending": pending,
+        "errors": errors,
+    }
+
+
 def _read_semantic_experiment(g, exp, b, path):
-    """Read explicit Factor occurrences and expose the legacy policy adapter."""
-    # Keep completeness semantics in one shared validator. The adapter fields
-    # below remain for reconstruct.py compatibility, while the report is the
-    # authoritative closed-world diagnostic for new-schema readers.
-    from semantic_model import validate_experiment
-    completion = validate_experiment(g, exp, materialize=False)
+    """Read explicit Factor occurrences and expose the reconstruction adapter."""
+    completion = _semantic_occurrence_report(g, exp, b, path)
     frames = []
     for f in g.objects(b, HW1.hasFrame):
         idx = g.value(f, HW1.frameIndex)
@@ -1192,34 +847,82 @@ def _read_semantic_experiment(g, exp, b, path):
     memberships = {x[2]: x[0] for x in frames} | {x[3]: x[0] for x in frames}
     selected = sorted({_local(x) for x in g.objects(exp, HW1.evaluatesFactor)})
     factors = list(g.subjects(HW1.inExperiment, exp))
-    seen = set(); frame_status = {idx: True for idx, *_ in frames}; pair_status = {}; masks = {}
+    frame_status = {idx: True for idx, *_ in frames}
+    pair_status = {(left[0], right[0]): True
+                   for left, right in zip(frames, frames[1:])}
+    masks = {}
     for node in factors:
         typ = g.value(node, HW1.hasDefinition)
-        if typ is None:
-            typ = g.value(node, HW1.factorType)
         cur = g.value(node, HW1.hasCurrentFrame); prev = g.value(node, HW1.hasPrevious)
         if typ is None or cur not in memberships or (prev is not None and prev not in memberships):
             raise ValueError(f"{path}: Factor {node} has foreign or incomplete image links")
         state = g.value(node, HW1.evaluationState)
         if state == HW1.Measured and (g.value(node, HW1.value) is None or g.value(node, HW1.status) is None):
             raise ValueError(f"{path}: measured Factor {node} must have exactly one value and status")
-        if prev is None:
-            idx = memberships[cur]; frame_status[idx] = frame_status[idx] and g.value(node, HW1.status) == HW1.Pass
-        else:
-            key = (memberships[prev], memberships[cur]); st = g.value(node, HW1.status)
-            pair_status[key] = pair_status.get(key, True) and st == HW1.Pass
         for mf in g.objects(node, HW1.maskFile):
             local = _local(typ); key = (memberships[prev], memberships[cur]) if prev is not None else memberships[cur]
             masks.setdefault(local, {"frames": {}, "pairs": {}})["pairs" if prev is not None else "frames"][key] = str(mf)
-    ordered = sorted(pair_status)
-    usable = [(i, j) for i, j in ordered if pair_status[(i, j)] and frame_status.get(i, True) and frame_status.get(j, True)]
-    complete = completion.complete
+
+    # Containers are the aggregate vocabulary used by the current writer. The
+    # reader also derives aggregates when a graph contains occurrences without
+    # container nodes; the occurrence validator remains the source of
+    # completeness truth.
+    annotations = list(g.objects(exp, HW1.producesAnnotation))
+    pairs = list(g.objects(exp, HW1.producesPair))
+    if annotations or pairs:
+        frame_status = {}
+        for ann in annotations:
+            frame = g.value(ann, HW1.annotatesFrame)
+            idx = g.value(ann, HW1.frameIndex)
+            if idx is None and frame is not None:
+                idx = next((row[0] for row in frames if row[1] == frame), None)
+            status = g.value(ann, HW1.qualificationStatus)
+            if idx is None or status not in (HW1.Pass, HW1.Fail):
+                raise ValueError(f"{path}: FrameAnnotation {ann} has incomplete aggregate metadata")
+            frame_status[int(idx)] = frame_status.get(int(idx), True) and status == HW1.Pass
+
+        pair_status = {}
+        ordered = []
+        for pair in pairs:
+            src = g.value(pair, HW1.sourceFrame)
+            tgt = g.value(pair, HW1.targetFrame)
+            pidx = g.value(pair, HW1.pairIndex)
+            status = g.value(pair, HW1.qualificationStatus)
+            if src not in {row[1] for row in frames} or tgt not in {row[1] for row in frames}:
+                raise ValueError(f"{path}: FramePair {pair} points outside the declared Batch")
+            if pidx is None or status not in (HW1.Pass, HW1.Fail):
+                raise ValueError(f"{path}: FramePair {pair} has incomplete aggregate metadata")
+            key = (next(row[0] for row in frames if row[1] == src),
+                   next(row[0] for row in frames if row[1] == tgt))
+            pair_status[key] = status == HW1.Pass
+            ordered.append((int(pidx), key))
+        ordered.sort()
+        usable = usable_links_from_query(g, exp)
+    else:
+        # Derive aggregate maps from occurrence statuses when container nodes are
+        # not present.
+        for node in factors:
+            typ = g.value(node, HW1.hasDefinition)
+            cur = g.value(node, HW1.hasCurrentFrame)
+            prev = g.value(node, HW1.hasPrevious)
+            status = g.value(node, HW1.status)
+            if status not in (HW1.Pass, HW1.Fail):
+                continue
+            if prev is None:
+                idx = memberships[cur]
+                frame_status[idx] = frame_status[idx] and status == HW1.Pass
+            else:
+                key = (memberships[prev], memberships[cur])
+                pair_status[key] = pair_status.get(key, True) and status == HW1.Pass
+        usable = [(i, j) for i, j in sorted(pair_status)
+                  if pair_status[(i, j)] and frame_status.get(i, True)
+                  and frame_status.get(j, True)]
     return {"exp_iri": URIRef(str(exp)), "exp_name": _experiment_name_from_iri(exp, path),
             "batch_name": _batch_name_from_batch_iri(b), "batch_iri": URIRef(str(b)),
             "selected": selected, "settings": _experiment_settings(g, exp, path),
             "frame_status": frame_status, "pair_status": pair_status,
-            "usable_links": usable, "mask_files": masks, "complete": complete,
-            "completion": completion.to_dict(), "graph": g}
+            "usable_links": usable, "mask_files": masks,
+            "complete": completion["complete"], "completion": completion, "graph": g}
 
 
 def read_experiment(path):
@@ -1300,9 +1003,8 @@ def read_experiment(path):
     ordered.sort(key=lambda row: row[0])
 
     # A frame that appears only as a pair endpoint is VACUOUSLY usable: with no
-    # annotation there is no claim about it to fail (§4.5). v2 raised here instead,
-    # because v2 annotated every frame; under selection that would reject every
-    # pair-only experiment.
+    # annotation there is no claim about it to fail (§4.5). Under selection this
+    # permits a pair-only experiment.
     endpoints = {end for _, ends, _ in ordered for end in ends}
     frame_status = {idx: per_frame.get(idx, True)
                     for idx in sorted(set(per_frame) | endpoints)}
@@ -1349,9 +1051,7 @@ _RUN_METADATA = {
 
 def _write_machine_section(path, student_text, machine_graph):
     """Re-serialize only the machine half (declaration bytes preserved). Full strategy note: docs/triplestore.md."""
-    body = machine_graph.serialize(format="turtle")
-    if isinstance(body, bytes):                      # rdflib < 6 returned bytes
-        body = body.decode("utf-8")
+    body = _serialize_machine_graph(machine_graph)
     tmp = f"{path}.tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         fh.write(student_text)
@@ -1405,9 +1105,9 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
     _verify_seal(full, exp, student_text, exp_path)
     expname = _experiment_name_from_iri(exp, exp_path)
     settings = _experiment_settings(full, exp, exp_path)
-    # Runs live in the experiment's own namespace tier: v5 (semantic) experiments
-    # mint under DATA_NS, legacy v4 ones under NS. Readers resolve runs through
-    # hw1:hasRun and accept both prefixes, so this branch changes nothing they see.
+    # Semantic experiments mint instance data under DATA_NS. Container-schema
+    # experiments use the ontology namespace for their instance IRIs. Readers
+    # resolve runs through hw1:hasRun, so this branch is transparent to callers.
     if _graph_uses_semantic_schema(full, exp):
         run = data_run_iri(expname, mode)
         legacy_run = run_iri(expname, mode)
@@ -1415,11 +1115,6 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
         run = run_iri(expname, mode)
         legacy_run = None
 
-    # The status PROPERTY comes from the factor's hw1:statusProperty, never from
-    # string concatenation. The naming rule (value + "Status") is frozen, but a
-    # concatenating writer would happily invent `hw1:somethingStatus` for a key no
-    # factor grades, and the resulting triple would be invisible to every reader —
-    # they all find statuses through `?factor hw1:statusProperty ?p`.
     factors = load_quality_factors()
     if mask_factor is not None:
         selected = {_local(f) for f in full.objects(exp, HW1.evaluatesFactor)}
@@ -1434,8 +1129,6 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
             f"{{'over', 'status', 'polarity', 'qualifiedBy'}}; key {exc} is missing"
         ) from None
 
-    # Resolve EVERY key, and every status, before touching the graph: a typo in the
-    # second key must not leave the first one half-written into the file.
     planned = []
     for key in values:
         if key not in status_property:
@@ -1444,18 +1137,10 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
                 f"value together with its status, so a value nothing grades has no "
                 f"business in a run node. Graded value properties: "
                 f"{', '.join(sorted(status_property))}")
-        # ROUND FIRST, GRADE SECOND (§4.5). `_storable` is the value as
-        # the .ttl will actually hold it; grading the unrounded argument would bake a
-        # verdict the stored number re-grades the other way. mapMeanL2 = 0.4000000001
-        # against maxMapMeanL2 = 0.4 is the case: it stores as `4e-01`, so a `Fail`
-        # graded from the raw double sits next to a number that reads Pass.
         stored = _storable(values[key])
         planned.append((HW1[key], HW1[status_property[key]], stored,
                         status_for(key, stored, settings, factors)))
 
-    # hw1:usedFrame points at the SHARED structural frames of the batch (§2), not at
-    # anything experiment-scoped, so the frame IRIs are minted from the batch name —
-    # which is why an experiment without hw1:onBatch cannot record provenance at all.
     frames = None
     if used_frames is not None:
         b = full.value(exp, HW1.onBatch)
@@ -1469,13 +1154,11 @@ def write_run(exp_path, mode, values, used_frames=None, frame_count=None,
 
     # Everything a run node consists of lives BELOW the marker, so the mutation
     # happens on the machine section alone and the declaration is never re-serialized.
-    g = Graph()
-    g.parse(data=machine_text, format="turtle")
+    g = _parse_machine_graph(machine_text, student_text)
 
     # ── remove exactly what is about to be written, and nothing else ──────────
-    # On semantic experiments also clear a legacy-NS run node of the same mode:
-    # runs written before the DATA_NS migration would otherwise linger as a stale
-    # second node reachable through hw1:hasRun.
+    # Clear an alternate-namespace run node when present, preventing a stale
+    # second node from remaining reachable through hw1:hasRun.
     runs_to_clear = (run,) if legacy_run is None else (run, legacy_run)
     for old_run in runs_to_clear:
         for value_p, status_p, _, _ in planned:
@@ -1549,7 +1232,9 @@ def write_pair_measurements(exp_path, factor_local, measurements):
     # Explicit-occurrence schema: update only returned canonical keys.  Absent
     # evidence remains Pending, never an invented infinity/Measured result.
     if _graph_uses_semantic_schema(full, exp):
-        machine = Graph(); machine.parse(data=machine_text, format="turtle")
+        machine = _parse_machine_graph(machine_text, student_text)
+        artifact_root = os.path.splitext(os.path.abspath(exp_path))[0]
+        relative_to = os.path.dirname(os.path.abspath(exp_path))
         factors = load_quality_factors(); by_pair = {
             (int(m["source"]), int(m["target"])): dict(m) for m in measurements}
         info = factors[factor_local]; over = info.get("over", factor_local)
@@ -1565,8 +1250,6 @@ def write_pair_measurements(exp_path, factor_local, measurements):
         written = 0
         for node in list(machine.subjects(HW1.inExperiment, exp)):
             node_def = machine.value(node, HW1.hasDefinition)
-            if node_def is None:
-                node_def = machine.value(node, HW1.factorType)
             if _local(node_def) != factor_local:
                 continue
             prev, cur = machine.value(node, HW1.hasPrevious), machine.value(node, HW1.hasCurrentFrame)
@@ -1581,17 +1264,48 @@ def write_pair_measurements(exp_path, factor_local, measurements):
             value = _storable(float(m.get("value", float("nan"))))
             machine.add((node, HW1.value, _double_literal(value))); machine.add((node, HW1.status, status_for(over, value, settings, factors))); machine.add((node, HW1.evaluationState, HW1.Measured)); written += 1
             if "count" in m: machine.remove((node, HW1.supportCount, None)); machine.add((node, HW1.supportCount, Literal(int(m["count"]), datatype=XSD.integer)))
-        # Recompute completion from explicit state; preserve declaration bytes.
-        machine.remove((exp, RDF.type, HW1.FullEvaluatedFrames))
-        occurrences = list(machine.subjects(HW1.inExperiment, exp))
-        if occurrences and all(machine.value(n, HW1.evaluationState) == HW1.Measured for n in occurrences): machine.add((exp, RDF.type, HW1.FullEvaluatedFrames))
+            mask_file = _write_mask_artifact(
+                m.get("mask"), artifact_root, relative_to, factor_local,
+                f"{i}_{j}.png")
+            if mask_file is not None:
+                for old in list(machine.objects(node, HW1.maskFile)):
+                    if _mask_factor_from_path(old, exp_path) == factor_local:
+                        machine.remove((node, HW1.maskFile, old))
+                machine.add((node, HW1.maskFile, Literal(mask_file)))
+
+        # Refresh the pair aggregate used by the shared selection query. The
+        # generic Factor statuses are the atomic vocabulary; this aggregate is
+        # only the conjunction over the selected pair factors.
+        selected_pair_locals = {
+            local for local in selected
+            if factors.get(local, {}).get("over") in _PAIR_OBSERVABLES
+        }
+        for pair in machine.objects(exp, HW1.producesPair):
+            src = machine.value(pair, HW1.sourceFrame)
+            tgt = machine.value(pair, HW1.targetFrame)
+            src_depth = machine.value(src, HW1.hasDepthImage)
+            tgt_depth = machine.value(tgt, HW1.hasDepthImage)
+            pair_statuses = []
+            for node in machine.subjects(HW1.inExperiment, exp):
+                definition = machine.value(node, HW1.hasDefinition)
+                if definition is None or _local(definition) not in selected_pair_locals:
+                    continue
+                if (machine.value(node, HW1.hasPrevious) == src_depth and
+                        machine.value(node, HW1.hasCurrentFrame) == tgt_depth):
+                    pair_statuses.append(machine.value(node, HW1.status) == HW1.Pass)
+            machine.set((pair, HW1.qualificationStatus,
+                         HW1.Pass if pair_statuses and all(pair_statuses)
+                         else HW1.Fail))
+
+        # Completion is derived by the reader from occurrence state. Do not
+        # write a second RDF verdict onto the Experiment: deferred evidence can
+        # change the derived result without changing the experiment vocabulary.
         _write_machine_section(exp_path, student_text, machine)
         return written
 
     by_pair = {(int(m["source"]), int(m["target"])): dict(m)
                for m in measurements}
-    g = Graph()
-    g.parse(data=machine_text, format="turtle")
+    g = _parse_machine_graph(machine_text, student_text)
     expname = _experiment_name_from_iri(exp, exp_path)
     artifact_root = os.path.splitext(os.path.abspath(exp_path))[0]
     relative_to = os.path.dirname(os.path.abspath(exp_path))
@@ -1643,9 +1357,7 @@ def write_pair_measurements(exp_path, factor_local, measurements):
     return written
 
 
-# =============================================================================
-# batch2ttl  — the STRUCTURE of one capture, and not one measured number
-# =============================================================================
+# batch2ttl: structural graph of one capture.
 def _resolve_generation_settings(gen_args, decls):
     """Generation sidecar settings for a batch. Full strategy note: docs/triplestore.md."""
     given = {}
@@ -1696,19 +1408,14 @@ def build_batch_graph(data_dir, floor, generation=None, derived_from=None):
         # query then reads the verdict ("regenerate the data") off the node it
         # already has, without a second join into the TBox.
         g.add((s, HW1.settingRole, HW1[decl["role"]]))
-        # settingForFactor is SINGLE-VALUED — the primary factor only, here exactly
-        # as on experiment-scoped settings (§4.5). v2 wrote the affected
-        # factors out too, so that attribution could blame brightnessGain for CRUSHED
-        # shadows and not only for blown highlights — the failure a low_light batch
-        # actually produces. v3 keeps that blame and drops the duplication: `explore`
-        # reaches the affected factors by traversing hw1:paramAffectsFactor in the
-        # TBox, which is the one edge that was being copied here.
+        # settingForFactor is SINGLE-VALUED: the primary factor only. `explore`
+        # reaches affected factors by traversing hw1:paramAffectsFactor in the
+        # TBox, so the setting node does not duplicate those links.
         g.add((s, HW1.settingForFactor, decl["primaryIri"]))
         g.add((s, HW1.settingValue, _setting_value_literal(generation[param], decl["kind"])))
 
-    # prov:wasDerivedFrom BETWEEN BATCHES is the only surviving prov: term
-    # (§6): "these pixels came from those pixels, corrupted". It is NOT
-    # asserted between experiments — there are no derived experiments in v2.
+    # prov:wasDerivedFrom connects BATCHES only: "these pixels came from those
+    # pixels, corrupted". It is not asserted between experiments.
     if derived_from:
         g.add((b, PROV.wasDerivedFrom, batch_iri(derived_from)))
 
@@ -1719,9 +1426,9 @@ def build_batch_graph(data_dir, floor, generation=None, derived_from=None):
         g.add((f, RDF.type, HW1.Frame))
         g.add((f, HW1.frameIndex, Literal(int(stem), datatype=XSD.integer)))
 
-        # An image node carries schema:contentUrl and NOTHING ELSE in v2
-        # (§4.3): the observables moved to the experiment-scoped
-        # FrameAnnotation, because two experiments cannot both own one image node.
+        # An image node carries schema:contentUrl and NOTHING ELSE: observables
+        # live on the experiment-scoped FrameAnnotation, because two experiments
+        # cannot both own one image node.
         rc = component_iri(name, stem, "rgb")
         g.add((f, HW1.hasRGBImage, rc))
         g.add((rc, RDF.type, HW1.RGBImage))
@@ -1756,11 +1463,10 @@ def _warn_stem_gaps(frames, prefix):
 
 
 def cmd_batch2ttl(args):
-    """Optional generation-provenance sidecar batch.ttl (deprecated as a required step). Full strategy note: docs/triplestore.md."""
-    print("[batch2ttl] DEPRECATED: `declare` and `experiment` take the capture "
-          "directory directly (`declare --data-dir <dir> --floor <n>`). This "
-          "command is now only the optional writer of generation provenance into "
-          "<data_dir>/batch.ttl.", file=sys.stderr)
+    """Write an optional generation-provenance sidecar batch.ttl."""
+    print("[batch2ttl] writing generation provenance for the capture. The "
+          "declaration and experiment commands can also use the capture directory "
+          "directly.", file=sys.stderr)
     decls = load_parameter_declarations(_ONTOLOGY_TTL)
     generation = _resolve_generation_settings(getattr(args, "gen", None), decls)
 
@@ -1787,18 +1493,7 @@ def cmd_batch2ttl(args):
 
 
 
-# =============================================================================
-# declare  — scaffold a declaration Turtle so nobody starts from a blank page
-#
-#   The declaration is still the one piece of RDF the student AUTHORS
-#   (§4.2): this command only writes the boilerplate — prefixes, the
-#   Experiment node whose IRI tail equals the file stem, the batch join
-#   (hw1:batchFile = the capture directory, hw1:onBatch derived from --floor +
-#   basename), a factor selection, and the PREDICTION block as comments.
-#   Everything it writes is the student's to edit until `api.py experiment`
-#   seals the file; it never assesses and never overwrites an existing
-#   declaration.
-# =============================================================================
+# declare: scaffold a declaration Turtle.
 def _factor_menu_comment(factors, decls):
     """Factor menu comment block for declarations."""
     menu = _selectable_factors(factors)
@@ -1820,8 +1515,8 @@ def _declare_capture_args(args):
     floor = int(getattr(args, "floor", 1) or 1)
     if data_dir_arg and batch_file_arg:
         raise SystemExit(
-            "[declare] pass --data-dir (the capture directory) or the deprecated "
-            "--batch-file, not both.")
+            "[declare] pass --data-dir (the capture directory) or --batch-file, "
+            "not both.")
     if data_dir_arg:
         resolved = _resolve_batch_file(data_dir_arg)
         if not _is_capture_dir(resolved):
@@ -1833,9 +1528,10 @@ def _declare_capture_args(args):
     if not batch_file_arg:
         raise SystemExit(
             "[declare] --data-dir is required (the capture directory containing "
-            "rgb/ and depth/). `batch2ttl` is no longer a step in this loop.")
-    print("[declare] --batch-file is deprecated: pass --data-dir <capture-dir> "
-          "instead. The scaffold will name the capture directory in hw1:batchFile.",
+            "rgb/ and depth/). Generation provenance may be recorded separately "
+            "with `batch2ttl`.")
+    print("[declare] using --batch-file; --data-dir is preferred for direct capture "
+          "references. The scaffold records the capture directory in hw1:batchFile.",
           file=sys.stderr)
     resolved = _resolve_batch_file(batch_file_arg)
     if _is_capture_dir(resolved):
@@ -1870,7 +1566,7 @@ def cmd_declare(args):
             f"the two flags must agree.")
     if os.path.exists(out):
         raise SystemExit(
-            f"[declare] {out} already exists and hw1/experiments/ is append-only "
+            f"[declare] {out} already exists and experiments/ is append-only "
             f"(§3.1): a new tuning idea is a NEW declaration under a "
             f"new name, and an existing file — assessed or not — is never "
             f"regenerated over.")
@@ -1922,8 +1618,18 @@ def cmd_declare(args):
         "",
         "@prefix hw1:  <http://taica.course/hw1/ontology#> .",
         f"@prefix batch: <{DATA_NS}batch/> .",
-        f"@prefix exp:   <{DATA_NS}experiment/> .",
+        f"@prefix data:  <{DATA_NS}> .",
+        f"@prefix exp:   <{EXP_NS}> .",
+        f"@prefix annotation: <{EXP_NS}{name}/annotation/> .",
+        f"@prefix factor: <{EXP_NS}{name}/factor/> .",
+        f"@prefix pair: <{EXP_NS}{name}/pair/> .",
+        f"@prefix run: <{EXP_NS}{name}/run/> .",
+        f"@prefix setting: <{EXP_NS}{name}/setting/> .",
+        f"@prefix frame: <{DATA_NS}batch/{name_of_batch}/frame/> .",
+        f"@prefix rgb: <{DATA_NS}batch/{name_of_batch}/rgb/> .",
+        f"@prefix depth: <{DATA_NS}batch/{name_of_batch}/depth/> .",
         "@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .",
+        "@prefix schema: <https://schema.org/> .",
         "@prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .",
         "",
         f"exp:{name}",
@@ -1986,75 +1692,26 @@ def cmd_declare(args):
     return 0
 
 
-# =============================================================================
-# experiment  — ONE declaration in, ONE machine section out, ONCE
-#
-#   This is the command the whole layout exists for, and in v3 it is the command
-#   that reads what a STUDENT wrote. The declaration (§4.2) names a
-#   capture directory and says which frames to grade, on which factors, under
-#   which thresholds; this command measures exactly that from the rasters on
-#   disk and appends the numbers, the verdicts, the defaulted settings and the
-#   tamper seal to the declaration's OWN FILE, below the marker (§3.1/§4.3).
-#
-#   WRITE-ONCE. A file that already carries `MACHINE_MARKER` is a hard error and
-#   there is no `--force`: an experiment is one treatment, and the way to try
-#   another threshold is to copy the declaration to a new name. That is what turns
-#   `hw1/experiments/` into an append-only lab notebook whose series of files IS
-#   the report, and it restores v2's "nothing is ever overwritten" guarantee by
-#   immutability instead of by digest identity (§6).
-#
-#   EVERYTHING v2 CARRIED ON THE COMMAND LINE IS DELETED (§7): `--batch-dir`,
-#   `--floor`, `--set`, `--exp-id`, `--label`, `--no-pairs`, `--out`. The command
-#   takes exactly one positional argument, the declaration path; the batch comes
-#   from `hw1:batchFile`, the settings are FactorSettings, the label is
-#   `rdfs:label`, and pairs are always minted.
-# =============================================================================
-
-# How often the measuring loops print a progress line. 387 frames x up to 5
-# observables plus 386 pairs x 2 is well under a minute but far too long to look
-# alive, and a command that prints nothing for forty seconds gets killed by the
-# person running it. Progress goes to STDERR, not stdout: it is a status display,
-# not a result, and `api.py experiment ... > log` must keep the summary readable.
+# experiment: one declaration in, one machine section out, once. Write-once.
 _PROGRESS_EVERY = 25
 
-# WHICH OBSERVABLE GOES ON WHICH NODE, AND WHAT MEASURES IT (§4.3,
-# frozen). Two tables, read three ways:
-#
-#   * PLACEMENT. `clipHiFraction` / `clipLoFraction` are rgb-annotation
-#     properties, the three active depth-frame observables are depth-annotation
-#     properties, and the three pair observables live on the FramePair. That placement is
-#     structural rather than cosmetic: an annotation exists per frame PER
-#     MODALITY, and a modality with no selected factor gets no node at all.
-#   * MEASUREMENT. `params` is what the measurer needs out of the setting vector
-#     — checked against the vector before a single PNG is opened — and `measure`
-#     is the one call site of each measurer in this file.
-#   * THE MENU. `_selectable_factors` derives the eight-factor menu of §4.2 from
-#     these keys: a QualityFactor whose `hw1:overProperty` appears here is
-#     selectable; one whose does not (mapMeanL2, coverageF) is a RUN factor,
-#     never selected and always evaluated. Adding a menu factor is therefore
-#     adding a TBox declaration and one row here, and no per-factor branch
-#     anywhere else.
-#
-# `hw1:meanValue` is deliberately absent: no QualityFactor is declared over it, it
-# carries no status and it takes no part in any aggregate. It is written beside
-# the clip factors as the baseline they must beat (§4.3), and putting it in this
-# table would quietly promote the deliberately-weak baseline to a criterion.
+# Observable placement, measurement, and menu tables.
 _FRAME_OBSERVABLES = {
     "highFrequencyDepthResidual": {
         "modality": "depth",
         "params": ("residualMaskK",),
-        "measure_mask": lambda rgb, depth, s: _high_frequency_depth_residual(
+        "measure_mask": lambda rgb, depth, s: frame_high_frequency_depth_residual(
             depth, float(s["residualMaskK"]))},
     "flyingPixelRatio": {
         "modality": "depth",
         "params": ("flyingPixelWindow", "flyingPixelPlanarityTol"),
-        "measure_mask": lambda rgb, depth, s: _flying_pixel_ratio(
+        "measure_mask": lambda rgb, depth, s: frame_flying_pixel_ratio(
             depth, int(s["flyingPixelWindow"]),
             float(s["flyingPixelPlanarityTol"]))},
     "validTileCoverage": {
         "modality": "depth",
         "params": ("tileSize", "tileValidFloor"),
-        "measure_mask": lambda rgb, depth, s: _valid_tile_coverage(
+        "measure_mask": lambda rgb, depth, s: frame_valid_tile_coverage(
             depth, int(s["tileSize"]), float(s["tileValidFloor"]))},
     "clipHiFraction": {
         "modality": "rgb",
@@ -2070,28 +1727,51 @@ _PAIR_OBSERVABLES = {
     "identityMedianDepthChange": {
         "params": ("changeMaskK",),
         "count_property": "identityMedianDepthChangePixelCount",
-        "measure_mask": lambda d0, d1, s: _identity_median_depth_change(
+        "measure_mask": lambda d0, d1, s: pair_identity_median_depth_change(
             d0, d1, float(s["changeMaskK"]))},
     "jointValidDepthRatio": {
         "params": (),
         "count_property": "jointValidDepthPixelCount",
-        "measure_mask": lambda d0, d1, s: _joint_valid_depth_ratio(d0, d1)},
-    # This Tier-B factor is measured from the actual constant-velocity state by
-    # utils.reconstruct before fitting the current link.  experiment still puts
-    # its settings in the vector and mints the pair; write_pair_measurements adds
-    # the value/status/count/mask after the baseline consumer run.
+        "measure_mask": lambda d0, d1, s: pair_joint_valid_depth_ratio(d0, d1)},
+    # This factor is measured from the coarse pre-ICP transform supplied by
+    # utils.reconstruct. experiment still puts its settings in the vector and
+    # mints the pair; write_pair_measurements adds the evidence after the run.
     "priorWarpDepthResidual": {
         "params": ("priorWarpDepthGate",),
         "count_property": "priorWarpDepthResidualPixelCount",
         "deferred": True},
 }
 
-# The declaration whitelist of §4.2, as two tuples. Anything else in
-# the student section — an annotation, a status, an observable value, a run — is a
-# hard error, because VERDICTS ARE COMPUTED, NEVER DECLARED. A file that could
-# assert its own `hw1:qualificationStatus` would let a student write the answer
-# they wanted next to the data that disagrees with it, and nothing downstream
-# could tell that apart from a measurement.
+
+def make_prior_warp_measurement_callback(data_root, depth_gate, measurements):
+    """Build a reconstruct callback that measures and records each prior warp.
+
+    The callback receives the prior transform mapping the previous camera into
+    the current camera, plus the source and target depth paths. It appends
+    standard pair-measurement records for ``write_pair_measurements`` and keeps
+    the transform in each record for run-time provenance.
+    """
+    intrinsics_path = os.path.join(data_root, "intrinsics.json")
+    with open(intrinsics_path, "r", encoding="utf-8") as stream:
+        intrinsics = json.load(stream)
+    gate = float(depth_gate)
+
+    def record_prior(source, target, source_depth, target_depth, prior_T):
+        transform = np.asarray(prior_T, dtype=np.float64)
+        value, mask, count = pair_prior_warp_depth_residual(
+            source_depth, target_depth, transform, intrinsics, gate)
+        measurements.append({
+            "source": int(source),
+            "target": int(target),
+            "value": float(value),
+            "count": int(count),
+            "mask": mask,
+            "prior_transform": transform.tolist(),
+        })
+
+    return record_prior
+
+# Declaration whitelist: verdicts are computed, never declared.
 _DECLARATION_EXPERIMENT_PREDICATES = (
     RDF.type, RDFS.label, HW1.schemaVersion, HW1.batchFile, HW1.onBatch, HW1.evaluatesFactor,
     HW1.hasFactorSetting)
@@ -2176,13 +1856,13 @@ def _floor_from_batch_name(name):
 
 
 def _sidecar_batch_ttl(data_dir):
-    """Optional `<data_dir>/batch.ttl` written by the deprecated `batch2ttl`."""
+    """Optional `<data_dir>/batch.ttl` generation-provenance sidecar."""
     path = os.path.join(data_dir, "batch.ttl")
     return path if os.path.isfile(path) else None
 
 
 def _parse_batch_ttl(path):
-    """Read one Batch out of a (legacy / sidecar) batch.ttl.
+    """Read one Batch out of a batch.ttl provenance sidecar.
 
     Returns (graph, batch_iri, batch_name, batch_path_literal, floor_or_None).
     """
@@ -2275,7 +1955,7 @@ def _resolve_declared_capture(batch_file, on_batch, path, exp, bf, *, semantic=F
 
     raise ValueError(
         f"{path}: hw1:batchFile {batch_file!r} does not resolve to a capture "
-        f"directory with rgb/ and depth/ subdirs, or to a (deprecated) batch.ttl "
+        f"directory with rgb/ and depth/ subdirs, or to a batch.ttl provenance sidecar "
         f"({resolved!r}; relative paths resolve against the current working "
         f"directory, {os.getcwd()!r}). Point it at the capture directory. "
         f"Offending triple:\n    {_fmt_triple(exp, HW1.batchFile, bf)}")
@@ -2460,7 +2140,7 @@ def read_declaration(path):
             raise ValueError(
                 f"{path}: the setting of hw1:{local} must carry exactly one "
                 f"hw1:settingForFactor, its parameter's hw1:paramPrimaryFactor "
-                f"{primary} — it is single-valued in v3 (§4.5) and "
+                f"{primary} — it is single-valued (§4.5) and "
                 f"readers traverse hw1:paramAffectsFactor in the TBox for the rest. "
                 f"Found: {found}. Write:\n"
                 f"    {_fmt_triple(node, HW1.settingForFactor, decl['primaryIri'])}")
@@ -2660,7 +2340,7 @@ def _semantic_schema_enabled(path=_ONTOLOGY_TTL):
 
 
 def _graph_uses_semantic_schema(graph, experiment):
-    """Opt into the Factor model per artifact, while retaining legacy reads."""
+    """Select the explicit Factor occurrence model for an artifact."""
     version = graph.value(experiment, HW1.schemaVersion)
     if version is not None:
         try:
@@ -2679,14 +2359,42 @@ def _semantic_factor_info(factors, factor_local):
 def _bind_readable_namespaces(g, batch_name_str, expname):
     """Bind short Turtle prefixes so output stays readable."""
     g.bind("hw1", HW1); g.bind("schema", SCHEMA); g.bind("xsd", XSD)
+    g.bind("exp", Namespace(EXP_NS))
+    g.bind("data", Namespace(DATA_NS))
     g.bind("batch", Namespace(f"{DATA_NS}batch/"))
     g.bind("frame", Namespace(f"{DATA_NS}batch/{batch_name_str}/frame/"))
     g.bind("rgb", Namespace(f"{DATA_NS}batch/{batch_name_str}/rgb/"))
     g.bind("depth", Namespace(f"{DATA_NS}batch/{batch_name_str}/depth/"))
-    g.bind("exp", Namespace(f"{DATA_NS}experiment/"))
-    g.bind("factor", Namespace(f"{DATA_NS}experiment/{expname}/factor/"))
-    g.bind("setting", Namespace(f"{DATA_NS}experiment/{expname}/setting/"))
-    g.bind("run", Namespace(f"{DATA_NS}experiment/{expname}/run/"))
+    g.bind("factor", Namespace(f"{EXP_NS}{expname}/factor/"))
+    g.bind("annotation", Namespace(f"{EXP_NS}{expname}/annotation/"))
+    g.bind("pair", Namespace(f"{EXP_NS}{expname}/pair/"))
+    g.bind("setting", Namespace(f"{EXP_NS}{expname}/setting/"))
+    g.bind("run", Namespace(f"{EXP_NS}{expname}/run/"))
+
+
+def _serialize_machine_graph(graph):
+    """Serialize experiment resources with explicit readable namespaces."""
+    body = graph.serialize(format="turtle")
+    if isinstance(body, bytes):                      # rdflib < 6 returned bytes
+        body = body.decode("utf-8")
+    lines = body.splitlines(keepends=True)
+    first_triple = 0
+    for first_triple, line in enumerate(lines):
+        if line.strip() and not line.startswith("@prefix "):
+            break
+    return "".join(lines[first_triple:])
+
+
+def _parse_machine_graph(machine_text, student_text):
+    """Parse a relative machine section with declaration directives in scope."""
+    directives = re.findall(
+        r"^\s*(?:@prefix\s+[A-Za-z][\w-]*:\s*<[^>]+>\s*\.|"
+        r"@base\s*<[^>]+>\s*\.)\s*$", student_text, re.MULTILINE)
+    graph = Graph()
+    source = ("\n".join(line.strip() for line in directives) + "\n" +
+              machine_text)
+    graph.parse(data=source, format="turtle")
+    return graph
 
 
 def _build_semantic_machine_graph(decl, data_dir, digest, decls, factors,
@@ -2711,6 +2419,8 @@ def _build_semantic_machine_graph(decl, data_dir, digest, decls, factors,
                        (s, HW1.settingRole, HW1[d["role"]]), (s, HW1.settingForFactor, d["primaryIri"])): g.add(triple)
         g.add((s, HW1.settingValue, _setting_value_literal(settings[param], d["kind"])))
     count = 0; measured = 0
+    frame_factor_status = {}
+    pair_factor_status = {}
     for factor_local in selected:
         over, _ = _semantic_factor_info(factors, factor_local)
         if over in _FRAME_OBSERVABLES:
@@ -2718,14 +2428,16 @@ def _build_semantic_machine_graph(decl, data_dir, digest, decls, factors,
             for stem, rgb_path, depth_path in frames:
                 node = data_factor_iri(expname, factor_local, stem); image = data_component_iri(name, stem, spec["modality"])
                 g.add((node, RDF.type, HW1.Factor)); g.add((node, RDF.type, HW1.SingleImageFactor)); g.add((node, HW1.inExperiment, exp)); g.add((node, HW1.hasDefinition, HW1[factor_local])); g.add((node, HW1.hasCurrentFrame, image))
-                # targetKind/evaluationPhase describe the reusable FactorDefinition
-                # in the TBox; the occurrence carries only its
+                # targetKind/evaluationPhase describe the reusable QualityFactor
+                # definition in the TBox; the occurrence carries only its
                 # hasDefinition link and measured result.
                 if "measure_mask" in spec:
                     value, mask, _count = _measured_with_mask(over, factors, f"frame {stem}", spec["measure_mask"], rgb_path, depth_path, settings)
                 else:
                     value, mask = _measured(over, factors, f"frame {stem}", spec["measure"], rgb_path, depth_path, settings), None
-                g.add((node, HW1.value, _double_literal(value))); g.add((node, HW1.status, status_for(over, _storable(value), settings, factors))); g.add((node, HW1.evaluationState, HW1.Measured)); measured += 1; count += 1
+                status = status_for(over, _storable(value), settings, factors)
+                g.add((node, HW1.value, _double_literal(value))); g.add((node, HW1.status, status)); g.add((node, HW1.evaluationState, HW1.Measured)); measured += 1; count += 1
+                frame_factor_status[(factor_local, int(stem))] = status
                 if mask is not None:
                     mf = _write_mask_artifact(mask, artifact_root, artifact_relative_to, factor_local, f"{stem}.png")
                     if mf: g.add((node, HW1.maskFile, Literal(mf)))
@@ -2739,13 +2451,64 @@ def _build_semantic_machine_graph(decl, data_dir, digest, decls, factors,
                     g.add((node, HW1.evaluationState, HW1.Pending))
                 else:
                     value, mask, support = _measured_with_mask(over, factors, f"pair {i}_{j}", spec["measure_mask"], d0, d1, settings)
-                    g.add((node, HW1.value, _double_literal(value))); g.add((node, HW1.status, status_for(over, _storable(value), settings, factors))); g.add((node, HW1.evaluationState, HW1.Measured)); measured += 1
+                    status = status_for(over, _storable(value), settings, factors)
+                    g.add((node, HW1.value, _double_literal(value))); g.add((node, HW1.status, status)); g.add((node, HW1.evaluationState, HW1.Measured)); measured += 1
+                    pair_factor_status[(factor_local, i, j)] = status
                     if mask is not None:
                         mf = _write_mask_artifact(mask, artifact_root, artifact_relative_to, factor_local, f"{i}_{j}.png")
                         if mf: g.add((node, HW1.maskFile, Literal(mf)))
                     if spec.get("count_property"): g.add((node, HW1.supportCount, Literal(int(support or 0), datatype=XSD.integer)))
-    if count and count == measured: g.add((exp, RDF.type, HW1.FullEvaluatedFrames))
-    return g, {"frames": len(frames), "factors": count, "annotations": 0, "pairs": 0}
+    # Factors own the generic value/status state; annotations and pairs own the
+    # aggregate used by reconstruction's shared usable-link query.
+    frame_factors = [
+        factor_local for factor_local in selected
+        if _semantic_factor_info(factors, factor_local)[0] in _FRAME_OBSERVABLES
+    ]
+    pair_factors = [
+        factor_local for factor_local in selected
+        if _semantic_factor_info(factors, factor_local)[0] in _PAIR_OBSERVABLES
+    ]
+    n_annotations = 0
+    for stem, _rgb_path, _depth_path in frames:
+        for kind in _ANNOTATION_KINDS:
+            scoped = [
+                factor_local for factor_local in frame_factors
+                if _FRAME_OBSERVABLES[_semantic_factor_info(factors, factor_local)[0]]["modality"] == kind
+            ]
+            if not scoped:
+                continue
+            ann = data_annotation_iri(expname, stem, kind)
+            image = data_component_iri(name, stem, kind)
+            g.add((exp, HW1.producesAnnotation, ann))
+            g.add((ann, RDF.type, HW1.FrameAnnotation))
+            g.add((ann, HW1.annotatesFrame, data_frame_iri(name, stem)))
+            g.add((ann, HW1.frameIndex, Literal(int(stem), datatype=XSD.integer)))
+            g.add((ann, HW1.describesImage, image))
+            statuses = [frame_factor_status.get((factor_local, int(stem)))
+                        for factor_local in scoped]
+            g.add((ann, HW1.qualificationStatus,
+                   HW1.Pass if statuses and all(status == HW1.Pass for status in statuses)
+                   else HW1.Fail))
+            n_annotations += 1
+
+    n_pairs = 0
+    for pair_index, ((s0, _rgb0, _d0), (s1, _rgb1, _d1)) in enumerate(zip(frames, frames[1:])):
+        i, j = int(s0), int(s1)
+        pair = data_pair_iri(expname, i, j)
+        g.add((exp, HW1.producesPair, pair))
+        g.add((pair, RDF.type, HW1.FramePair))
+        g.add((pair, HW1.sourceFrame, data_frame_iri(name, i)))
+        g.add((pair, HW1.targetFrame, data_frame_iri(name, j)))
+        g.add((pair, HW1.pairIndex, Literal(pair_index, datatype=XSD.integer)))
+        statuses = [pair_factor_status.get((factor_local, i, j))
+                    for factor_local in pair_factors]
+        g.add((pair, HW1.qualificationStatus,
+               HW1.Pass if not statuses or all(status == HW1.Pass for status in statuses)
+               else HW1.Fail))
+        n_pairs += 1
+
+    return g, {"frames": len(frames), "factors": count,
+                "annotations": n_annotations, "pairs": n_pairs}
 
 
 def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
@@ -2754,11 +2517,10 @@ def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
     decls = load_parameter_declarations(_ONTOLOGY_TTL) if decls is None else decls
     factors = load_quality_factors(_ONTOLOGY_TTL) if factors is None else factors
 
-    # New TBoxes advertise hw1:Factor; route only that schema through the
-    # occurrence writer.  Legacy artifacts continue through the container adapter
-    # below, which is important for historical course fixtures.
-    # The declaration's explicit schemaVersion selects the writer.  This keeps
-    # historical v4 declarations readable while new scaffolds emit v5 Factors.
+    # Declarations with the current schemaVersion use explicit Factor
+    # occurrences. Earlier declaration shapes continue through the container
+    # adapter so the reader can inspect course fixtures without changing the
+    # current writer vocabulary.
     if str(decl.get("schema_version", "")).startswith("5"):
         return _build_semantic_machine_graph(
             decl, data_dir, digest, decls, factors,
@@ -2806,7 +2568,7 @@ def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
         # the verdict ("regenerate the data" / "re-measure" / "re-qualify") off the
         # node it already has, with no second join into the TBox.
         g.add((s, HW1.settingRole, HW1[d["role"]]))
-        # SINGLE-VALUED in v3 (§4.5): the primary factor only. Readers traverse
+        # SINGLE-VALUED (§4.5): the primary factor only. Readers traverse
         # hw1:paramAffectsFactor in the TBox for the rest, which is also what makes
         # a student's blank-node setting legal — nothing has to re-open it.
         g.add((s, HW1.settingForFactor, d["primaryIri"]))
@@ -2826,7 +2588,7 @@ def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
             # is what lets a report order by capture order without loading the batch
             # file at all (§2).
             g.add((ann, HW1.frameIndex, Literal(int(stem), datatype=XSD.integer)))
-            # describesImage (new in v3): the annotation's link to the raster it
+            # describesImage: the annotation's link to the raster it
             # measured. annotatesFrame stays for frame-level joins; this one says
             # WHICH OF THE TWO IMAGES the numbers on this node are about.
             g.add((ann, HW1.describesImage, component_iri(name, stem, kind)))
@@ -2853,17 +2615,9 @@ def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
                 passed.append(_write_observable(g, ann, value_local, value,
                                                 settings, factors))
             if kind == "rgb":
-                # meanValue: the value and NO status, whenever an rgb annotation
-                # exists (§4.3). There is no QualityFactor over it, so there is no
-                # polarity and no threshold — asking `status_for` for one raises by
-                # design. It ships so a student can check "is the picture dark on
-                # average?" against the factors that actually predict reconstruction
-                # failure, and discover that it does not.
                 g.add((ann, HW1.meanValue, _double_literal(
                     _measured("meanValue", factors, f"frame {stem} (rgb)",
                               lambda p: frame_mean_value(p), rgb_path))))
-            # The aggregate of §4.5, on the node that says what was aggregated:
-            # Pass iff every SELECTED factor of THIS modality passed.
             g.add((ann, HW1.qualificationStatus,
                    HW1.Pass if all(passed) else HW1.Fail))
             n_annotations += 1
@@ -2873,11 +2627,6 @@ def build_machine_graph(decl, data_dir, digest, decls=None, factors=None,
     # ── one FramePair per consecutive pair, ALWAYS ────────────────────────────
     steps = list(zip(frames, frames[1:]))
     total_pairs = len(steps)
-    # `enumerate(..., start=0)` is the hw1:pairIndex: a 0-based ORDINAL over the
-    # pairs in ascending order, NOT a frame stem (§4.3). The stems are
-    # in the IRI, where a gap in the capture stays visible as `41_43`; the ordinal
-    # is what a reader sorts by, because unpadded stems sort lexicographically as
-    # 0, 1, 10, 100, 11 and a time series read in that order looks like noise.
     for pair_index, ((s0, _, d0), (s1, _, d1)) in enumerate(steps):
         i, j = int(s0), int(s1)
         p = pair_iri(expname, i, j)
@@ -2938,7 +2687,7 @@ def cmd_experiment(args):
             f"into a NEW file, edit it there (including the hw1:Experiment IRI tail, "
             f"which must equal the new file's stem), and run "
             f"`api.py experiment <new-name>.ttl`. The old file stays as it is: that "
-            f"is what makes hw1/experiments/ a lab notebook.")
+            f"is what makes experiments/ a lab notebook.")
 
     decls = load_parameter_declarations(_ONTOLOGY_TTL)
     factors = load_quality_factors(_ONTOLOGY_TTL)
@@ -2965,8 +2714,8 @@ def cmd_experiment(args):
 
     data_dir = decl["batch_path"]
     frames = _pair_frames(data_dir)
-    # Legacy declarations still name a batch.ttl: keep the stale-file check so a
-    # sidecar that drifted from the pixels cannot silently join to nothing.
+    # A batch.ttl sidecar is checked against the pixels so a stale sidecar cannot
+    # silently join to nothing.
     declared = _resolve_batch_file(decl["batch_file"])
     if os.path.isfile(declared) and not _is_capture_dir(declared):
         _check_batch_file(declared, decl["batch_name"],
@@ -2986,9 +2735,7 @@ def cmd_experiment(args):
         artifact_root=artifact_root,
         artifact_relative_to=os.path.dirname(os.path.abspath(path)))
 
-    body = g.serialize(format="turtle")
-    if isinstance(body, bytes):                          # rdflib < 6 returned bytes
-        body = body.decode("utf-8")
+    body = _serialize_machine_graph(g)
     # APPEND, so no failure in this command can touch the student's declaration.
     with open(path, "a", encoding="utf-8") as fh:
         if not text.endswith("\n"):
@@ -3025,52 +2772,13 @@ def _modalities_of(g):
     """Modalities covered by a factor selection."""
     kinds = []
     for kind in _ANNOTATION_KINDS:
-        if any(str(a).endswith(f"/{kind}")
+        if any(str(a).rsplit("/", 1)[-1].startswith(f"{kind}_")
                for a in g.subjects(RDF.type, HW1.FrameAnnotation)):
             kinds.append(kind)
     return kinds
 
 
-# =============================================================================
-# explore  — read-only terminal tables (§7.1)
-#   Four views: a batch file, an unassessed declaration, an assessed experiment
-#   (settings, per-frame table, summary and the computed VERDICT section), and
-#   several experiments side by side. It measures nothing and writes nothing, and
-#   it re-implements no rule: `read_declaration` and `read_experiment` above are
-#   its two inputs, and the TBox wiring (`overProperty` / `statusProperty` /
-#   `polarity` / `qualifiedBy` / `paramPrimaryFactor` / `paramAffectsFactor`) is
-#   how it resolves factors and culprit settings generically — exactly as the
-#   deleted SPARQL queries did (§10).
-#
-#   READ-ONLY, AND THAT IS AN INVARIANT OF THIS WHOLE SECTION. Nothing below
-#   opens a file for writing, calls `write_run`, serializes a graph to disk or
-#   mutates a parsed graph. The graphs it parses are throwaway projections of
-#   files on disk; the files themselves are never reopened after being read.
-#
-#   THE SEAL IS NOT SHORT-CIRCUITED. View 3 goes through `read_experiment`,
-#   which verifies `hw1:declarationDigest` before returning anything (§3.1), so a
-#   file whose declaration was edited after assessment raises here instead of
-#   printing a pretty table of stale numbers.
-#
-#   THE WIDE-TABLE DECISION (§7.1 asks for one, so it is stated here rather than
-#   left to the reader): the per-frame table PRINTS EVERY ROW and keeps every
-#   COLUMN narrow. A 6-factor selection over a 387-frame batch is 387 lines of
-#   117 characters (measured) — one line per frame, value and status merged into
-#   cell ("0.0312 P"), long observable names abbreviated with a legend printed
-#   above the table. Rows are cheap: a terminal has scrollback, and plain ASCII
-#   one-line-per-frame means `explore … | grep ' F'` finds every failing frame.
-#   Columns are not cheap: a wrapped line destroys the alignment that makes a
-#   column scannable at all. The alternative — eliding all-Pass rows — was
-#   REJECTED because `query` is deleted (§10) and the frozen command surface (§7)
-#   gives `explore` no flag with which to ask for an elided row back, so an
-#   elision here would hide a measured value with no way to recover it. Nothing
-#   in this section truncates anything silently; where a list is long it is
-#   printed in full or the count of what was left out is printed with it.
-# =============================================================================
-
-# What to do about a culprit setting, by its parameter's hw1:paramRole
-# (§4.2/§7.1). Keyed by role — NOT by factor and NOT by parameter:
-# adding a menu factor, or a parameter for one, must require no edit here.
+# explore: read-only terminal tables. Measures and writes nothing.
 _ROLE_FIX = {
     "GenerationSetting": "regenerate the data (this level is baked into the pixels)",
     "MeasurementSetting": "change the number, re-measure -> a NEW experiment",
@@ -3249,7 +2957,7 @@ def _classify(path):
     """What kind of thing this is: "batch" | "declaration" | "experiment".
 
     BY CONTENT, not by name. A capture directory (rgb/ + depth/) is a batch;
-    a `hw1:Batch` subject is a (deprecated) batch.ttl; a `hw1:Experiment`
+    a `hw1:Batch` subject is a batch.ttl provenance sidecar; a `hw1:Experiment`
     subject is an experiment file, assessed iff the file carries
     `MACHINE_MARKER` (§3.1). Anything else is an error that NAMES what it
     found, because "unrecognised file" with no evidence is the least useful
@@ -3269,9 +2977,9 @@ def _classify(path):
     assessed = _marker_offset(text) is not None
 
     if batches and exps:
-        # v5 assessed files intentionally embed the Batch snapshot so a single
-        # Turtle file is self-contained for SPARQL. Legacy v4 batch sidecars and
-        # experiment files remain mutually exclusive.
+        # Assessed files embed the Batch snapshot so a single Turtle file is
+        # self-contained for SPARQL. Batch sidecars and experiment files remain
+        # mutually exclusive.
         version = g.value(exps[0], HW1.schemaVersion)
         has_factors = any(g.subjects(HW1.inExperiment, exps[0]))
         if (version is not None and str(version).startswith("5")) or has_factors:
@@ -3280,7 +2988,7 @@ def _classify(path):
             f"{path}: this file declares BOTH a hw1:Batch ({batches[0]}) and a "
             f"hw1:Experiment ({exps[0]}). §3 keeps them in separate "
             f"files — structure in the capture directory, measurement in "
-            f"hw1/experiments/<expname>.ttl — so `explore` cannot tell which view "
+            f"experiments/<expname>.ttl — so `explore` cannot tell which view "
             f"you want.")
     if batches:
         return "batch"
@@ -3312,7 +3020,7 @@ def _generation_from_batch_graph(g, b, path):
 
 
 def _batch_facts_from_ttl(path):
-    """Batch header/table facts from a (deprecated) batch.ttl sidecar."""
+    """Batch header/table facts from a batch.ttl provenance sidecar."""
     g, b, name, stored_path, floor = _parse_batch_ttl(path)
     frames = []
     for f in g.objects(b, HW1.hasFrame):
@@ -3340,8 +3048,8 @@ def _batch_facts_from_ttl(path):
 def _batch_facts_from_capture(data_dir, declared_name=None):
     """Batch header/table facts from the rasters on disk.
 
-    An optional `<data_dir>/batch.ttl` sidecar still supplies generation
-    provenance; the frame list always comes from `_pair_frames`.
+    An optional `<data_dir>/batch.ttl` sidecar supplies generation provenance;
+    the frame list always comes from `_pair_frames`.
     """
     sidecar = _sidecar_batch_ttl(data_dir)
     generation, derived_from, floor, name, iri = [], None, None, None, None
@@ -3383,7 +3091,7 @@ def _batch_facts_from_capture(data_dir, declared_name=None):
 def _batch_facts(path, declared_name=None):
     """Everything the batch header and frame table need.
 
-    Accepts a capture directory (preferred) or a batch.ttl (deprecated sidecar).
+    Accepts a capture directory (preferred) or a batch.ttl provenance sidecar.
     Shared by view 1 (the batch itself) and view 2 (the capture a declaration
     names in `hw1:batchFile`), so the two print the SAME header from the same
     code.
@@ -3399,7 +3107,7 @@ def _batch_facts(path, declared_name=None):
 
 
 def _print_batch_header(facts):
-    """The batch header of §7.1: name, floor, path, frame count, generation settings."""
+    """Print capture identity plus the metadata needed before reconstruction."""
     _kv("batch", facts["name"])
     _kv("floor", facts["floor"])
     _kv("batchPath", facts["batch_path"])
@@ -3408,6 +3116,36 @@ def _print_batch_header(facts):
     stems = [idx for idx, _, _ in facts["frames"]]
     span = f", stems {stems[0]}..{stems[-1]}" if stems else ""
     _kv("frames", f"{len(stems)}{span}")
+    capture_dir = facts.get("batch_path")
+    if capture_dir and os.path.isdir(capture_dir):
+        intrinsics_path = os.path.join(capture_dir, "intrinsics.json")
+        if not os.path.isfile(intrinsics_path):
+            _kv("intrinsics", "MISSING (reconstruction cannot determine the camera)")
+        else:
+            try:
+                with open(intrinsics_path, encoding="utf-8") as handle:
+                    intrinsics = json.load(handle)
+                keys = ("width", "height", "hfov")
+                if not all(key in intrinsics for key in keys):
+                    _kv("intrinsics", "INVALID (requires width, height, hfov)")
+                else:
+                    _kv("intrinsics", f"{int(intrinsics['width'])}x"
+                                      f"{int(intrinsics['height'])}, "
+                                      f"hfov={float(intrinsics['hfov']):g} deg")
+            except (OSError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                _kv("intrinsics", f"INVALID ({exc})")
+
+        gt_path = os.path.join(capture_dir, "GT_pose.npy")
+        if not os.path.isfile(gt_path):
+            _kv("GT poses", "MISSING (Mean L2 evaluation unavailable)")
+        else:
+            try:
+                gt = np.load(gt_path, allow_pickle=False)
+                valid_shape = gt.ndim == 2 and gt.shape[1] == 7
+                _kv("GT poses", f"shape={tuple(gt.shape)}"
+                               + ("" if valid_shape else " INVALID; requires (N, 7)"))
+            except (OSError, ValueError) as exc:
+                _kv("GT poses", f"INVALID ({exc})")
     if facts["derived_from"] is not None:
         _kv("derivedFrom", _fmt_term(facts["derived_from"]))
     if facts["generation"]:
@@ -3528,12 +3266,12 @@ def _section_settings(path, exp_iri):
     level" check applying to both.
     """
     student_text, machine_text = _split_sections(_read_text(path))
-    sides = []
-    for text in (student_text, machine_text or ""):
-        g = Graph()
-        g.parse(data=text, format="turtle")
-        sides.append(_experiment_settings(g, exp_iri, path))
-    return sides[0], sides[1]
+    student = Graph()
+    student.parse(data=student_text, format="turtle")
+    machine = (_parse_machine_graph(machine_text, student_text)
+               if machine_text is not None else Graph())
+    return (_experiment_settings(student, exp_iri, path),
+            _experiment_settings(machine, exp_iri, path))
 
 
 def _observable_placement(g, exp, factors, selected):
@@ -4215,15 +3953,7 @@ def cmd_explore(args):
     return _view_experiment(paths[0])
 
 
-# =============================================================================
-# Frame selection — the segment cutter
-#   In v1 this was the body of a `select` subcommand that minted a derived
-#   experiment. Both are deleted (§11): selection is not an artefact,
-#   it is a step inside `reconstruct.py`, which calls this function on the
-#   `usable_links` that `read_experiment` derived and then records the outcome as
-#   `hw1:usedFrame` on the selected run. So this is a pure list-to-lists function
-#   with no RDF in it at all — the grading happened upstream, in `status_for`.
-# =============================================================================
+# Frame selection: usable links -> maximal contiguous segments.
 def cut_contiguous_segments(usable_links):
     """Usable links -> maximal contiguous segments (no length floor). Full strategy note: docs/triplestore.md."""
     links = sorted(set((int(i), int(j)) for i, j in usable_links))
@@ -4243,15 +3973,13 @@ def cut_contiguous_segments(usable_links):
     return segments
 
 
-# =============================================================================
-# CLI
-# =============================================================================
+# CLI.
 def _build_parser():
     p = argparse.ArgumentParser(
         description="HW1 data-quality CLI (rdflib + local SPARQL). Scaffold a DECLARATION "
                     "over a capture directory (declare), assess it (experiment), "
                     "and read the result back as terminal tables (explore). "
-                    "batch2ttl is a deprecated optional sidecar for generation "
+                    "batch2ttl is an optional sidecar for generation "
                     "provenance. reconstruct.py completes the suite. SPARQL runs "
                     "locally over .ttl files; no server or daemon is required.",
         epilog="A measured value means nothing without the settings it was "
@@ -4263,7 +3991,7 @@ def _build_parser():
 
     b2t = sub.add_parser(
         "batch2ttl",
-        help="DEPRECATED. Optional sidecar: write generation provenance to "
+        help="Optional sidecar: write generation provenance to "
              "<data_dir>/batch.ttl. declare/experiment/explore take the capture "
              "directory directly.")
     b2t.add_argument("--data-dir", required=True,
@@ -4318,8 +4046,8 @@ def _build_parser():
                           "batch name, so floor1_mixed_dev and floor2_mixed_dev are "
                           "distinct batches.")
     dec.add_argument("--batch-file", default=None,
-                     help="DEPRECATED. Path to a capture directory or a legacy "
-                          "batch.ttl. Prefer --data-dir; the scaffold writes the "
+                     help="Path to a capture directory or a batch.ttl provenance "
+                          "sidecar. Prefer --data-dir; the scaffold writes the "
                           "capture directory into hw1:batchFile either way.")
     dec.add_argument("--factor", action="append", default=[], metavar="FACTOR",
                      help="One menu factor to select, repeatable (with or without the "

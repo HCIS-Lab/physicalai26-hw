@@ -10,18 +10,20 @@ lives in `packages/simulator`.
 Interactive collection (pygame window, keyboard-driven):
 
 ```bash
-pixi run -e habitat python hw1/load.py
+pixi run -e habitat python load.py
 ```
 
 Replay a saved pose trajectory through the same frame-saving pipeline:
 
 ```bash
-pixi run -e habitat python hw1/load.py --trajectory trajectories/secondfloor.npy
+pixi run -e habitat python load.py --trajectory trajectories/secondfloor.npy
 ```
 
-The config defaults to `hw1/configs/second_floor.yaml` (`--config` to
+The config defaults to `configs/second_floor.yaml` (`--config` to
 override); `--output-root` overrides `output.root`; `--fps` paces the preview
-loop.
+loop. The config's `trajectory` entry documents the course replay input but is
+not selected implicitly: pass `--trajectory` explicitly so an omitted argument
+still means interactive collection.
 
 ## Controls
 
@@ -36,13 +38,14 @@ loop.
 
 The config's `uncertainties` block defines hard-edged circular flicker zones
 (`center: [x, z]`, `radius`). A frame is degraded iff the **agent stands
-inside a zone** — where it is, not when it got there. Zone membership is
-therefore reproducible; the flicker phase and depth noise are not (both key
-on time `t`, which is wall-clock while driving and `frame_index / fps` in
-replay). `--clean` (or `uncertainties.enabled: false`) switches the zones off
-for uncorrupted collection. After a run, a per-zone frame count is printed —
-a zone never entered contributed nothing, silently degenerating toward a
-clean baseline.
+inside a zone** — where it is, not when it got there. With a fixed `.npy` pose
+replay, fixed `--fps`, and the configured depth seed, zone membership, flicker
+phase, and depth-noise sequence are reproducible. Interactive collection uses
+wall-clock time and human input, so it is intentionally not bit-for-bit
+reproducible. `--clean` (or `uncertainties.enabled: false`) switches the zones
+off for an uncorrupted collection. After a run, a per-zone frame count is
+printed — a zone never entered contributed nothing, silently degenerating toward
+a clean baseline.
 
 ## Outputs (under `output.root`)
 

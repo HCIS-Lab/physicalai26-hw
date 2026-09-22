@@ -6,15 +6,9 @@
 import os
 import re
 import sys
-import time
 import argparse
-import json
-import inspect
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-import numpy as np                                      # noqa: E402
-import open3d as o3d                                    # noqa: E402
 
 import api                                              # noqa: E402
 import utils                                            # noqa: E402
@@ -29,36 +23,6 @@ def _capture_dir_name(batch_name):
     return _FLOOR_PREFIX.sub("", batch_name)
 
 
-def _plan_selected(exp):
-    """The frames of the selected run, or None when there is nothing to select.
-
-    Returns (frames, segments) with `frames` the ascending concatenation of the
-    kept segments, or (None, []) when the experiment has no usable link at all —
-    the §7 "do not write an INF run" case, which the caller reports and skips.
-
-    There is no length floor to read: every maximal chain of usable links is a
-    segment (`api.cut_contiguous_segments`, and the deletion note in the TBox).
-    """
-    segments = api.cut_contiguous_segments(exp["usable_links"])
-    if not segments:
-        print(f"[reconstruct] selection is EMPTY: {len(exp['usable_links'])} usable "
-              f"links, so there is not one consecutive pair to chain.")
-        print(f"[reconstruct]   -> NO selected run written (§7): an INF "
-              f"run would report 'nothing to reconstruct' in the same triple a "
-              f"measurement failure uses.")
-        print(f"[reconstruct]   -> fix per the verdict: loosen a Qualification "
-              f"threshold and re-measure, or regenerate the capture.")
-        return None, segments
-
-    frames = [f for seg in segments for f in seg]
-    spans = ", ".join(f"{s[0]}..{s[-1]}({len(s)})" for s in segments[:8])
-    if len(segments) > 8:
-        spans += f", … +{len(segments) - 8} more"
-    print(f"[reconstruct] selection: {len(segments)} segment(s), {len(frames)} frames "
-          f"[{spans}]")
-    return frames, segments
-
-
 def _segments_from_frames(frames):
     """Sorted frame indices -> maximal contiguous segments, including singletons."""
     segments = []
@@ -71,162 +35,30 @@ def _segments_from_frames(frames):
 
 
 def _plan_query_selected(exp, query_path):
-    """Select frames from a student's local SPARQL SELECT query.
+    """SPARQL file -> (frames, segments) to reconstruct.
 
-    The query must bind ``?frame`` (a HW1 frame IRI) or ``?frameIndex`` (an
-    integer). Results are constrained to frames known to this experiment, then
-    cut into contiguous segments so a personal assessment cannot silently create
-    unmeasured temporal jumps.
+    Runs the query against the experiment graph via
+    api.frames_from_sparql_query, cuts the flat frame list into maximal
+    contiguous segments so no hidden temporal jump is reconstructed.
+    Returns (None, []) when the selection is empty (nothing to run).
     """
     try:
-        with open(query_path, "r", encoding="utf-8") as handle:
-            query_text = handle.read()
-            result = _run_selection_query(exp, query_text)
+        selected = api.frames_from_sparql_query(exp, query_path)
     except OSError as exc:
-        raise ValueError(f"cannot read --selection-query {query_path!r}: {exc}") from None
-    if result.type != "SELECT":
-        raise ValueError("--selection-query must be a SPARQL SELECT query that binds "
-                         "?frame or ?frameIndex")
-
-    names = {str(var): var for var in result.vars}
-    frame_var = names.get("frame")
-    index_var = names.get("frameIndex")
-    if frame_var is None and index_var is None:
-        raise ValueError("--selection-query must bind ?frame (a frame IRI) or "
-                         "?frameIndex (an integer)")
-
-    selected = set()
-    known_iris = _experiment_frame_iris(exp)
-    for row in result:
-        from_frame = None if frame_var is None else row[frame_var]
-        from_index = None if index_var is None else row[index_var]
-        if from_frame is None and from_index is None:
-            continue
-        try:
-            if from_frame is not None:
-                # Never accept a foreign frame merely because its IRI has the
-                # same numeric tail as a frame in this experiment.
-                if str(from_frame) not in known_iris:
-                    raise ValueError("frame is not a member of the selected experiment")
-                frame = _frame_index_for_iri(exp, from_frame)
-            else:
-                frame = int(from_index)
-        except (TypeError, ValueError) as exc:
-            raise ValueError("--selection-query returned an invalid ?frame or "
-                             f"?frameIndex: {from_frame!r}, {from_index!r}") from exc
-        if from_frame is not None and from_index is not None:
-            try:
-                if frame != int(from_index):
-                    raise ValueError("--selection-query returned disagreeing ?frame and "
-                                     f"?frameIndex values: {from_frame!r}, {from_index!r}")
-            except (TypeError, ValueError) as exc:
-                raise ValueError("--selection-query returned a non-integer ?frameIndex: "
-                                 f"{from_index!r}") from exc
-        selected.add(frame)
-
-    known = set(exp["frame_status"])
-    unknown = sorted(selected - known)
-    if unknown:
-        raise ValueError("--selection-query selected frame index/indices not present in "
-                         f"this experiment: {', '.join(map(str, unknown))}")
+        raise ValueError(f"cannot read query {query_path!r}: {exc}") from None
     segments = _segments_from_frames(selected)
     if not segments:
-        print("[reconstruct] personal SPARQL selection is EMPTY; no selected run written.")
+        print("[reconstruct] SPARQL selection is EMPTY: no selected run.")
         return None, []
     frames = [frame for segment in segments for frame in segment]
     spans = ", ".join(f"{segment[0]}..{segment[-1]}({len(segment)})"
                       for segment in segments[:8])
     if len(segments) > 8:
         spans += f", … +{len(segments) - 8} more"
-    print(f"[reconstruct] personal SPARQL selection: {len(segments)} segment(s), "
+    print(f"[reconstruct] SPARQL selection: {len(segments)} segment(s), "
           f"{len(frames)} frames [{spans}]")
     return frames, segments
 
-
-def _experiment_frame_iris(exp):
-    """Return exact frame IRIs and indices from the assessed experiment graph."""
-    graph = exp["graph"]
-    hw1 = api.HW1
-    batch = graph.value(exp["exp_iri"], hw1.onBatch)
-    out = {}
-    if batch is None:
-        return out
-    for frame in graph.objects(batch, hw1.hasFrame):
-        index = graph.value(frame, hw1.frameIndex)
-        if index is not None:
-            out[str(frame)] = int(index)
-    return out
-
-
-def _frame_index_for_iri(exp, frame):
-    known = _experiment_frame_iris(exp)
-    try:
-        return known[str(frame)]
-    except KeyError:
-        raise ValueError(f"frame {frame!s} is not a member of the experiment batch") from None
-
-
-def _run_selection_query(exp, query_text):
-    """Run a policy with an exact experiment binding when supported by api."""
-    graph = exp["graph"]
-    experiment = exp.get("exp_iri")
-    query_fn = api.query_graph
-    try:
-        params = inspect.signature(query_fn).parameters
-        if experiment is not None and "bindings" in params:
-            return query_fn(graph, query_text, bindings={"experiment": experiment})
-        if experiment is not None and "init_bindings" in params:
-            return query_fn(graph, query_text,
-                            init_bindings={"experiment": experiment})
-    except (TypeError, ValueError):
-        pass
-    # Compatibility with the pre-refactor adapter.  The query templates still
-    # contain ?experiment; constrain it without changing student query text.
-    if experiment is not None:
-        try:
-            return graph.query(query_text, initBindings={"experiment": experiment})
-        except Exception as exc:
-            raise ValueError(f"invalid or unsupported SPARQL query: {exc}") from None
-    return query_fn(graph, query_text)
-
-
-def _score(data_root, version, frames, build_cloud, mode, map_voxel=None,
-           mask_root=None, prior_warp_depth_gate=0.10,
-           collect_prior_warp=False):
-    """Run and score once, preserving the gate count as experiment evidence."""
-    print(f"[reconstruct] === {mode} run ===")
-    t0 = time.time()
-    pcd, pred_cam_pos, gt_poses, diagnostics = utils.reconstruct(
-        data_root, version, frames=frames, build_cloud=build_cloud,
-        down_voxel=map_voxel, return_diagnostics=True, mask_root=mask_root,
-        prior_warp_depth_gate=prior_warp_depth_gate,
-        collect_prior_warp=collect_prior_warp)
-    l2 = utils.mean_l2(pred_cam_pos, gt_poses)
-    n = 0 if gt_poses is None else min(len(pred_cam_pos), len(gt_poses))
-    print(f"[reconstruct] {mode}: mean L2 = {l2:.4f} m  (over {n} frames, "
-          f"{len(pred_cam_pos)} reconstructed)")
-    print(f"[reconstruct] {mode}: execution time {time.time() - t0:.2f} s")
-    return pcd, pred_cam_pos, gt_poses, l2, diagnostics
-
-
-def _write_link_diagnostics(experiment_path, mode, diagnostics):
-    """Persist the JSON-safe, versioned per-link evidence for one scored run."""
-    root = os.path.splitext(os.path.abspath(experiment_path))[0]
-    directory = os.path.join(root, "diagnostics")
-    os.makedirs(directory, exist_ok=True)
-    path = os.path.join(directory, f"{mode}.json")
-    payload = {
-        "schema_version": int(diagnostics.get("schema_version", 1)),
-        "mode": mode,
-        "gated_steps": int(diagnostics.get("gated_steps", 0)),
-        "gated_frames": [int(v) for v in diagnostics.get("gated_frames", ())],
-        "links": diagnostics.get("links", []),
-    }
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, sort_keys=True, allow_nan=True)
-        handle.write("\n")
-    return os.path.relpath(
-        path, os.path.dirname(os.path.abspath(experiment_path))).replace(os.sep, "/")
 
 
 def _segment_metadata(segments):
@@ -239,39 +71,20 @@ def _segment_metadata(segments):
             "maxGapLength": max(gaps, default=0)}
 
 
-def _visualise(data_root, version, mode, result_pcd, pred_cam_pos, gt_poses):
-    """The Open3D window: reconstructed cloud + estimated (red) and GT (black) path."""
-    if gt_poses is None:
-        return
-    # ── Draw in the frame mean_l2 scores in, via the same two helpers, so the
-    #    gap between the red and black paths IS the number printed above ───────
-    pred_disp = utils.pred_positions_frame0(pred_cam_pos)
-    gt_disp   = utils.gt_positions_frame0(gt_poses)
-    n_min = min(len(pred_disp), len(gt_disp))
-    if n_min == 0:
-        return
-
-    # remove_ceiling reads the camera frame (ceiling at min y), so crop BEFORE
-    # rotating the cloud onto the scoring frame's axes.
-    scene_no_ceil = utils.remove_ceiling(result_pcd, margin=1.0)
-    to_gt_axes = np.eye(4)
-    to_gt_axes[:3, :3] = utils.CAM_TO_GT_AXES
-    scene_no_ceil.transform(to_gt_axes)
-    traj_pred = utils.make_trajectory(pred_disp[:n_min],   [1.0, 0.0, 0.0])  # red
-    traj_gt   = utils.make_trajectory(gt_disp[:n_min],     [0.0, 0.0, 0.0])  # black
-
-    print(f"[reconstruct] opening visualiser for the {mode} run …  (press Q to close)")
-    o3d.visualization.draw_geometries(
-        [scene_no_ceil, traj_pred, traj_gt],
-        window_name=f'HW1 Reconstruction - '
-                    f'{os.path.basename(os.path.normpath(data_root))} '
-                    f'({version}, {mode})',
-        # +Z of the old display frame became -Z here, so the up vector flips with it.
-        zoom=0.5, front=[0, -1, 0], lookat=[0, 0, 0], up=[0, 0, 1])
-
-
 def main():
-    parser = argparse.ArgumentParser()
+    """Workflow: declare -> measure -> select -> reconstruct -> show.
+
+    1. ``api.py declare`` scaffolds the experiment (factor selection).
+    2. ``api.py experiment`` measures the raw data against those factors.
+    3. Here, frame selection is one of two modes:
+       fullbatch (frames=None, the whole batch) or a SPARQL file
+       (``--sparql-query``) whose ?frame/?frameIndex bindings become the
+       frame list fed to ``utils.reconstruct``.
+    4. One reconstruction run, one Mean L2 number, one Open3D window.
+    """
+    parser = argparse.ArgumentParser(
+        description="Reconstruct a capture (fullbatch or SPARQL-selected frames), "
+                    "print Mean L2, show the cloud + trajectories.")
     # dest default is None ON PURPOSE: it is the only way to tell "caller asked for
     # open3d" from "caller said nothing", and the icpBackend rule below needs that.
     parser.add_argument('-v', '--version', type=str, default=None,
@@ -284,75 +97,47 @@ def main():
                         help='capture dir to reconstruct (rgb/ depth/ GT_pose.npy). '
                              'Stays explicit even though the experiment names the '
                              'same directory in hw1:batchFile.')
+    parser.add_argument('--voxel-size', type=float, default=0.05,
+                        help='registration voxel size in metres (default: 0.05)')
+    parser.add_argument('--seed', type=int, default=0,
+                        help='Open3D RANSAC seed (default: 0)')
     parser.add_argument('--no-vis', action='store_true',
                         help='skip the Open3D window (print metrics only)')
     parser.add_argument('--experiment', type=str, default=None,
-                        help='assessed experiment Turtle (hw1/experiments/<expname>.ttl): '
-                             'frame selection in via the baked Pass/Fail statuses, run '
-                             'values out, written below the machine marker. Omit for a '
+                        help='assessed experiment Turtle (experiments/<expname>.ttl): '
+                             'already measured by `api.py experiment`. The run value '
+                             'is written back below the machine marker. Omit for a '
                              'plain whole-batch visual run.')
     parser.add_argument('--selection-query', metavar='QUERY.rq', default=None,
-                        help='student-authored local SPARQL SELECT query over --experiment. '
-                             'It must bind ?frame (frame IRI) or ?frameIndex (integer). '
-                             'Overrides the default baked-status selection for the selected run; '
-                             'results are cut into contiguous segments.')
+                        help='SPARQL SELECT over --experiment binding ?frame (frame IRI) '
+                             'or ?frameIndex (integer). The bindings become the frame '
+                             'list; results are cut into contiguous segments.')
+    parser.add_argument('--sparql-query', dest='selection_query', metavar='QUERY.rq', default=None,
+                        help='alias of --selection-query.')
     parser.add_argument('--no-write', action='store_true',
                         help='dry run: print the results but write nothing into the '
                              'experiment file')
-    parser.add_argument('--reference-root', default=None,
-                        help='optional CLEAN capture used to build the whole-scene GT '
-                             'reference map. When supplied, write hw1:coverageF at '
-                             '10 cm alongside mapMeanL2. This intentionally builds a '
-                             'cloud even with --no-vis.')
-    parser.add_argument('--mask-dir', default=None,
-                        help='one exported factor-mask directory. PNG value 255 means '
-                             'drop; frame masks are <stem>.png and pair masks are '
-                             '<i>_<j>.png. Adds a hw1:MaskFiltered run.')
-    parser.add_argument('--mask-factor', default=None,
-                        help='factor local name for --mask-dir provenance (default: '
-                             'the mask directory basename)')
-    # Mutually exclusive because "both by default" is the contract (§7) and the two
-    # flags are ways to ask for LESS than the default, never for a third thing.
-    which = parser.add_mutually_exclusive_group()
-    which.add_argument('--baseline-only', action='store_true',
-                       help='run only the hw1:FullBatch (whole-batch) run')
-    which.add_argument('--selected-only', action='store_true',
-                       help='run only the hw1:GoodSegments (selected) run')
     args = parser.parse_args()
+
+    if args.voxel_size <= 0:
+        parser.error("--voxel-size must be positive")
+    if args.seed < 0:
+        parser.error("--seed must be non-negative")
+    if args.experiment is None and args.selection_query is not None:
+        parser.error("--sparql-query requires --experiment: it queries that experiment's "
+                     "local RDF graph.")
 
     data_root = args.data_root
     version = args.version
-    if args.mask_factor is not None and args.mask_dir is None:
-        parser.error("--mask-factor requires --mask-dir")
-
-    if args.experiment is None and args.selected_only:
-        parser.error("--selected-only needs --experiment: the selection comes from the "
-                     "Pass/Fail statuses baked into an experiment file "
-                    "(§4.5), and there is nothing to cut segments from without one.")
-    if args.experiment is None and args.selection_query is not None:
-        parser.error("--selection-query requires --experiment: it queries that experiment's "
-                     "local RDF graph.")
-
-    mask_factor = None
-    if args.mask_dir is not None:
-        mask_factor = (args.mask_factor or
-                       os.path.basename(os.path.normpath(args.mask_dir)))
 
     exp = None
     if args.experiment is not None:
         exp = api.read_experiment(args.experiment)
         print(f"[reconstruct] {args.experiment}: experiment {exp['exp_name']} on batch "
               f"{exp['batch_name']!r}, {len(exp['frame_status'])} frames, "
-              f"{len(exp['pair_status'])} pairs, "
-              f"{len(exp['usable_links'])} usable links")
-        if mask_factor is not None and mask_factor not in exp["selected"]:
-            parser.error(
-                f"--mask-factor {mask_factor!r} is not selected by the experiment; "
-                f"selected factors are {', '.join(exp['selected'])}")
+              f"{len(exp['pair_status'])} pairs")
 
-        # ── Guard: is this experiment even about this capture? ────────────────
-        # Scoring one capture and writing the number into another capture's
-        # experiment is silent and unrecoverable, and nothing else catches it.
+        # Guard: is this experiment even about this capture?
         exp_dir_name = _capture_dir_name(exp["batch_name"])
         arg_dir_name = os.path.basename(os.path.normpath(data_root))
         if exp_dir_name != arg_dir_name:
@@ -364,7 +149,7 @@ def main():
                   f"[reconstruct]   the score of one capture would be written into "
                   f"another capture's experiment.", file=sys.stderr)
 
-        # ── icpBackend: the RECORDED setting is authoritative ─────────────────
+        # The RECORDED icpBackend setting is authoritative.
         set_backend = exp["settings"].get("icpBackend")
         if set_backend is not None:
             set_backend = str(set_backend)
@@ -372,142 +157,80 @@ def main():
                 version = set_backend
                 print(f"[reconstruct] icpBackend from experiment: {version}")
             elif version != set_backend:
-                # Not an override: running my_icp and storing the number under an
-                # experiment that RECORDS open3d would make the file lie about the
-                # treatment that produced it.
                 parser.error(
                     f"--version {version!r} disagrees with the icpBackend setting "
                     f"{set_backend!r} recorded in {args.experiment}. That setting is "
                     f"part of the treatment this experiment declares; write a new "
-                    f"declaration for the other backend (§3.1: every "
-                    f"tuning is a brand-new experiment) instead of overriding it.")
+                    f"declaration for the other backend instead of overriding it.")
 
     if version is None:
-        version = 'open3d'                      # §5 declared default
+        version = 'open3d'
 
-    # ── What to run (§7: both by default) ────────────────────────
-    # Without an experiment there is nothing to select from, so the single run is
-    # the whole batch — the plain visual entry point, unchanged.
-    plan = []
-    if not args.selected_only:
-        plan.append(("baseline", None, [], None, None))
-    # If PriorWarpDepthResidual is deferred, selection must be planned only
-    # after the baseline writes its evidence and the experiment is reloaded.
-    # Appending to this list from the baseline iteration keeps the execution
-    # order (baseline, then selected) while avoiding stale RDF state.
-    selection_deferred = (exp is not None and not args.baseline_only and
-                          "PriorWarpDepthResidual" in exp["selected"] and
-                          not args.selected_only)
-    if exp is not None and not args.baseline_only and not selection_deferred:
-        frames, segments = (_plan_query_selected(exp, args.selection_query)
-                            if args.selection_query is not None else _plan_selected(exp))
-        if frames is not None:
-            plan.append(("selected", frames, segments, None, None))
-    if args.mask_dir is not None:
-        plan.append(("masked", None, [], args.mask_dir, mask_factor))
+    # Selection: fullbatch (whole batch) or SPARQL (frame list from query).
+    if args.selection_query is not None:
+        frames, segments = _plan_query_selected(exp, args.selection_query)
+        if frames is None:
+            return  # empty selection: nothing to reconstruct, nothing written
+        mode = "selected"
+    else:
+        frames, segments = None, []
+        mode = "baseline"
 
     # The map is only ever looked at by the visualiser; skipping it halves peak
-    # memory for the two-run default and utils.reconstruct guarantees the
-    # trajectory is identical either way.
-    build_cloud = not args.no_vis or args.reference_root is not None
+    # memory and utils.reconstruct guarantees the trajectory is identical either way.
+    build_cloud = not args.no_vis
 
-    gt_reference = None
-    if args.reference_root is not None:
-        import completeness
-        print(f"[reconstruct] building fixed GT map from {args.reference_root} …")
-        gt_reference = completeness.build_gt_reference(args.reference_root)
-        print(f"[reconstruct] GT map: {len(gt_reference.points)} points")
+    prior_measurements = []
+    prior_callback = None
+    measure_prior = (
+        exp is not None and not args.no_write and mode == "baseline" and
+        "PriorWarpDepthResidual" in exp["selected"])
+    if measure_prior:
+        prior_callback = api.make_prior_warp_measurement_callback(
+            data_root,
+            exp["settings"].get("priorWarpDepthGate", 0.10),
+            prior_measurements)
 
-    finished = []
-    prior_selected = exp is not None and "PriorWarpDepthResidual" in exp["selected"]
-    prior_gate = (float(exp["settings"].get("priorWarpDepthGate", 0.10))
-                  if exp is not None else 0.10)
-    for mode, frames, segments, mask_root, run_mask_factor in plan:
-        pcd, pred_cam_pos, gt_poses, l2, diagnostics = _score(
-            data_root, version, frames, build_cloud, mode,
-            map_voxel=0.03 if gt_reference is not None else None,
-            mask_root=mask_root, prior_warp_depth_gate=prior_gate,
-            collect_prior_warp=bool(prior_selected and mode == "baseline"))
-        values = {"mapMeanL2": l2}
-        if gt_reference is not None and gt_poses is not None:
-            coverage = completeness.fscore_for_capture(
-                pcd, gt_poses, gt_reference)[completeness.PRIMARY_TAU]["f"]
-            values["coverageF"] = coverage
-            print(f"[reconstruct] {mode}: map coverage F@10cm = {coverage:.4f}")
-        run_metadata = {"gatedSteps": diagnostics["gated_steps"]}
-        if mode == "selected":
-            run_metadata.update(_segment_metadata(segments))
-        finished.append((mode, frames, pcd, pred_cam_pos, gt_poses, l2,
-                         run_metadata, values))
+    print(f"[reconstruct] === {mode} run ===")
+    pcd, pred_cam_pos = utils.reconstruct(
+        data_root, version, frames=frames, build_cloud=build_cloud,
+        voxel_size=args.voxel_size, registration_seed=args.seed,
+        prior_transform_callback=prior_callback)
+    l2 = utils.visualize_and_evaluate(
+        pcd, pred_cam_pos, data_root, frames=frames,
+        title=f'{os.path.basename(os.path.normpath(data_root))} '
+              f'({version}, {mode})',
+        show=not args.no_vis)
 
-        if exp is None:
-            print(f"[reconstruct] no --experiment: mapMeanL2 = {l2!r} not written "
-                  f"anywhere")
-            continue
-        if args.no_write:
-            print(f"[reconstruct] --no-write: {mode} mapMeanL2 = {l2!r} NOT written "
-                  f"to {args.experiment}")
-            continue
-
-        if prior_selected and mode == "baseline":
-            api.write_pair_measurements(
-                args.experiment, "PriorWarpDepthResidual",
-                diagnostics.get("prior_warp_measurements", []))
-            # write_pair_measurements mutates the Turtle; reload through the
-            # canonical reader so qualification sees the persisted graph and
-            # completion state, not the pre-baseline in-memory snapshot.
-            exp = api.read_experiment(args.experiment)
-            if selection_deferred:
-                frames, segments = (_plan_query_selected(exp, args.selection_query)
-                                    if args.selection_query is not None else _plan_selected(exp))
-                if frames is not None:
-                    plan.append(("selected", frames, segments, None, None))
-
-        diagnostic_file = _write_link_diagnostics(
-            args.experiment, mode, diagnostics)
-
-        # ONE call per run, and the one writer of run triples (§8.2).
-        # `used_frames` is the selected run's provenance (hw1:usedFrame); the
-        # baseline asserts no frame list and states its size instead.
+    if exp is None:
+        print(f"[reconstruct] no --experiment: Mean L2 Distance = {l2!r} not written "
+              f"anywhere")
+    elif args.no_write:
+        print(f"[reconstruct] --no-write: {mode} Mean L2 Distance = {l2!r} NOT written "
+              f"to {args.experiment}")
+    else:
+        if measure_prior:
+            written = api.write_pair_measurements(
+                args.experiment, "PriorWarpDepthResidual", prior_measurements)
+            print(f"[reconstruct] wrote PriorWarpDepthResidual for "
+                  f"{written}/{len(prior_measurements)} reconstructed pair(s) "
+                  f"-> {args.experiment}")
         frame_count = len(pred_cam_pos)
         if frames is not None and frame_count != len(frames):
-            # utils.reconstruct skips a frame whose rgb/depth fails to load. Report
-            # it: hw1:runFrameCount is the number actually consumed, so it would
-            # otherwise silently disagree with COUNT(?usedFrame) (§4.4).
             print(f"[reconstruct] *** WARNING: {mode} run selected {len(frames)} "
                   f"frames but reconstructed {frame_count}; some frame failed to "
                   f"load. hw1:runFrameCount reports what was consumed.",
                   file=sys.stderr)
+        run_metadata = {}
+        if mode == "selected":
+            run_metadata.update(_segment_metadata(segments))
         api.write_run(
-            args.experiment, mode, values,
+            args.experiment, mode, {"mapMeanL2": l2},
             used_frames=frames if frames is not None else None,
-            frame_count=frame_count, metadata=run_metadata,
-            mask_factor=run_mask_factor, diagnostic_file=diagnostic_file)
-        # `l2` is the computed double; `write_run` stores it at the file's precision
-        # and grades THAT number (§4.5), so the literal in the file may
-        # be a rounded version of what is printed here.
-        print(f"[reconstruct] wrote {mode} run: mapMeanL2 = {l2!r} (stored at file "
-              f"precision), runFrameCount = {frame_count} -> {args.experiment}")
-
-    baseline_results = [row for row in finished if row[0] == "baseline"]
-    if baseline_results:
-        base_l2 = baseline_results[0][5]
-        for row in finished:
-            if row[0] == "baseline":
-                continue
-            other_l2 = row[5]
-            print(f"[reconstruct] baseline {base_l2:.4f} m vs {row[0]} "
-                  f"{other_l2:.4f} m "
-                  f"({row[0]} {'helped' if other_l2 < base_l2 else 'HURT'})")
-
-    if args.no_vis:
-        return
-
-    # One window per executed run, in order, each labelled with its mode: the
-    # baseline-vs-selected comparison is the deliverable, and two labelled windows
-    # are how you see it rather than infer it from two numbers.
-    for mode, _frames, pcd, pred_cam_pos, gt_poses, _l2, _meta, _values in finished:
-        _visualise(data_root, version, mode, pcd, pred_cam_pos, gt_poses)
+            frame_count=frame_count, metadata=run_metadata)
+        print(f"[reconstruct] wrote {mode} run: Mean L2 Distance = {l2!r} "
+              f"(stored as hw1:mapMeanL2 at file precision), "
+              f"runFrameCount = {frame_count} -> {args.experiment}")
 
 
 if __name__ == '__main__':

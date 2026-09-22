@@ -1,17 +1,11 @@
 # =============================================================================
 # HW1 config — second floor. THE single hw1 config.
-# Consumed by hw1/load.py (interactive collection) and scripts/evaluate.py
-# (two-run flow: scheduler off -> baseline/, scheduler on -> mixed/).
+# Consumed by load.py (interactive collection). reconstruct.py consumes the
+# resulting capture directories and does not read this config.
 #
-# Baseline values sourced from configs/baseline.secondfloor.yaml.
-# Reconciliation vs scripts/config.yaml drift (baseline.secondfloor.yaml WON on
-# every conflict):
-#   - actuation: scripts/config.yaml had 0.25 m / 10.0 deg -> kept 0.2 m / 6.0 deg
-#   - depth.noise_std: scripts/config.yaml had 0.0 -> kept 0.005 (nonzero base so
-#     light_noise_gain couples)
-#   - depth light gains: scripts/config.yaml had dropout 0.9 / range 0.1 (and
-#     noise gain 0.0) -> kept noise 4.0 / dropout 0.3 / range 0.4
-#   - output.save_semantic: scripts/config.yaml had true -> kept false
+# The values below are the single current collection configuration for the
+# second-floor workflow. There is no separate baseline config in this HW1 tree;
+# use `load.py --clean` or `uncertainties.enabled: false` for a clean capture.
 #
 # Single-seed policy: no top-level `seed:` — uncertainties.seed governs the
 # per-frame depth RNG and nothing else. The spatial ZoneScheduler is seedless.
@@ -32,7 +26,9 @@ agent:
   turn_left: 6.0
   turn_right: 6.0
 
-# evaluate replay input; missing file = hard error
+# Canonical replay input for the TA/reference workflow. `load.py` uses it only
+# when this path is passed explicitly with --trajectory; missing/invalid input
+# is a hard error in that replay path.
 trajectory: trajectories/secondfloor.npy
 
 camera:
@@ -67,7 +63,7 @@ lighting:
   ambient_rgb: [1.0, 1.0, 1.0]
 
 depth:
-  # Always-on baseline sensor model (unchanged from baseline.secondfloor.yaml).
+  # Always-on baseline sensor model for the clean/uncertain collection modes.
   # The zones never override this block directly — they move the exposure gain,
   # and the light_*_gain coupling below turns that into depth degradation.
   enabled: true
@@ -92,12 +88,12 @@ uncertainties:
   # effect: it modulates exposure gain as 1 + amplitude*sin(2*pi*frequency*t),
   # which apply_lighting puts on RGB and — through stress = |gain - 1| — the
   # depth.light_*_gain block above puts on depth.
-  enabled: true                  # evaluate.py flips false for the baseline run
+  enabled: true                  # load.py uses this for the interactive capture
   mode: spatial                  # the only mode; anything else is a hard error
   seed: 20                       # per-frame depth RNG ONLY (zones are seedless)
 
   # Placed against trajectories/secondfloor.npy (350 poses, 30.84 m of travel,
-  # 11.7 s at 30 fps) by the plan.md §3.1 procedure: centers at arclength
+  # 11.7 s at 30 fps) by the HW1 specification §3.1 procedure: centers at arclength
   # fractions 0.20 / 0.45 / 0.72, radius 1.5 m. Replayed frames per zone:
   # benign=67, moderate=47, severe=63, outside=173 (49%) — every zone entered
   # in ONE contiguous run, none swallows the episode, and the clean remainder
@@ -131,7 +127,7 @@ display:
   show_birdseye: true
 
 output:
-  root: "eval/_data/second_floor/"   # evaluate appends baseline/ | mixed/
+  root: "eval/_data/second_floor/"   # override with a student-specific directory
   save_rgb: true
   save_depth: true
   save_semantic: false               # ontology consumes rgb/depth only

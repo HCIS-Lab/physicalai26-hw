@@ -24,7 +24,7 @@ The first four are exactly the layout of a real capture, so it is a drop-in
 `--data_root`:
 
 ```
-pixi run -e habitat python hw1/reconstruct.py --data_root hw1/tests/fixtures/smoke
+pixi run -e habitat python reconstruct.py --data_root tests/fixtures/smoke
 ```
 
 ## The oracle
@@ -59,7 +59,7 @@ you score above zero is yours.
 ## Self-check
 
 ```
-pixi run -e habitat python -m pytest hw1/tests/fixtures/test_icp_smoke.py -v
+pixi run -e habitat python -m pytest tests/fixtures/test_icp_smoke.py -v
 ```
 
 This verifies the fixture, not your code: that the capture is well formed, that the

@@ -1,20 +1,17 @@
 """Config loading: yaml + schema defaults merge.
 
-NOTE (contract): no defaults merge exists in the legacy code (hw1/load.py:149 is
-a bare yaml.safe_load) — the defaults table here is NEW, covering the
-`uncertainties` block and the lighting/depth keys the legacy pipeline accessed
-unchecked. See plan.md "Interface contract".
+NOTE (contract): the defaults table covers the `uncertainties` block and every
+lighting/depth key consumed by the simulator. See HW1 specification "Interface
+contract".
 """
 
 import copy
 
 import yaml
 
-# Every key the pixel pipeline reads gets a default here. The legacy code
-# (hw1/load.py:268-357) indexed most lighting/depth keys UNCHECKED
-# (`cfg["brightness"]`, `cfg["noise_std"]`, ...), so a sparse yaml crashed with
-# KeyError deep inside the frame loop. With this table a config only needs to
-# state what it changes; file values always win over defaults (deep merge).
+# Every key the pixel pipeline reads gets a default here. A sparse YAML can
+# therefore state only what it changes; file values always win over defaults
+# (deep merge).
 #
 # Defaults are chosen to be inert: neutral lighting, fault-free depth, zero
 # light-coupling gains — merging them into a config never changes behavior the
@@ -45,7 +42,7 @@ _DEFAULTS = {
         "light_dropout_gain": 0.0,
         "light_range_gain": 0.0,
     },
-    # SPATIAL uncertainty injection (plan.md §3.1): flicker zones keyed on WHERE
+    # SPATIAL uncertainty injection (HW1 specification §3.1): flicker zones keyed on WHERE
     # the agent is, not on when it got there. A stateless, seedless ZoneScheduler
     # looks the agent's XZ position up in `zones` (first match wins, hard
     # circular edges). `enabled: false` (evaluate's baseline run) skips the
@@ -55,7 +52,7 @@ _DEFAULTS = {
         "mode": "spatial",        # the only mode; the temporal scheduler is gone
         "seed": 42,               # ONLY the per-frame depth RNG (engine.observe)
         # Inert default: no zones -> nothing ever fires. Real zone centres are
-        # placed per floor against the committed trajectory (plan.md §3.1
+        # placed per floor against the committed trajectory (HW1 specification §3.1
         # "Zone placement procedure"), never defaulted here — a zone the
         # trajectory misses degenerates the mixed run to baseline.
         "zones": [],

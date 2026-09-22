@@ -7,7 +7,7 @@ outside the sim environment too.
 The zone coordinates below are TEST-LOCAL SYNTHETIC GEOMETRY — a unit grid
 picked to make the circle arithmetic checkable by hand. They are not, and must
 not become, the zone placement for any real floor: those are placed against a
-committed trajectory (plan.md §3.1 "Zone placement procedure").
+committed trajectory (HW1 specification §3.1 "Zone placement procedure").
 """
 
 import importlib.util
@@ -208,7 +208,7 @@ def test_accepts_full_config_or_uncertainties_block():
     assert a.active(0.0, (0.0, 0.0)) == b.active(0.0, (0.0, 0.0))
 
 
-# --- frames-per-zone helper (plan.md §3.1 step 3) ------------------------------
+# --- frames-per-zone helper (HW1 specification §3.1 step 3) ------------------------------
 def _poses(xz):
     """(N,7) GT_pose.npy-shaped rows from XZ pairs (y and quaternion are junk
     the helper must ignore)."""

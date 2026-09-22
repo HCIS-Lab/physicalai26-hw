@@ -1,40 +1,26 @@
-# pixi environment
+# Pixi environment
 
-The pixi workspace (`pixi.toml`) replaces the conda instructions from the
-official habitat docs:
-
-```bash
-conda create -n habitat python=3.12 cmake=3.27
-conda activate habitat
-conda install habitat-sim withbullet -c conda-forge -c aihabitat
-```
-
-with a reproducible, lockfile-backed pixi environment.
+The project uses a lockfile-backed Pixi environment named `habitat`. It pins
+Python 3.9 for Habitat-Sim 0.3.3 and installs the reconstruction, capture,
+RDF, test, and dashboard dependencies.
 
 ## Usage
 
 ```bash
-pixi install -e habitat      # build the environment
-pixi run -e habitat smoke     # verify habitat-sim imports (with bullet)
-pixi shell -e habitat         # drop into the env
+pixi install -e habitat
+pixi run -e habitat smoke
+pixi run -e habitat python -m pytest tests/test_pipeline_workflow.py tests/test_new_factors.py tests/test_explore_dashboard.py -v
+pixi shell -e habitat
 ```
 
-## Notes
+Panel 1.4.5 and Bokeh 3.4.3 provide the experiment dashboard and self-contained
+HTML plot exports. Both are pinned for the workspace's Python 3.9 runtime.
 
-**Python version.** The official doc says `python=3.12`, but the `aihabitat`
-conda channel only publishes py3.9 builds for habitat-sim 0.3.x (0.3.0 - 0.3.3
-are all `py3.9_*_linux`). Pinning 3.12 makes the solve fail to find a
-habitat-sim build, so this env pins Python 3.9 instead.
+## Environment details
 
-**Channel order.** `channels = ["conda-forge", "aihabitat"]` (conda-forge first)
-mirrors `-c conda-forge -c aihabitat`.
-
-**numpy pin.** numpy is pinned to habitat-lab's required version so the conda
-side and the editable pypi install agree on a single numpy.
-
-**`withbullet`.** This is an (empty) track-features package on aihabitat that
-flips the habitat-sim-mutex to the bullet-enabled build, exactly like
-`conda install habitat-sim withbullet`.
-
-**habitat-lab.** Installed editable from the submodule, pinned at tag v0.3.3 to
-match habitat-sim 0.3.3.
+- `pixi.toml` uses the `conda-forge` and `aihabitat` channels and pins
+  `habitat-sim` 0.3.3 with Bullet support.
+- NumPy is pinned to 1.26.4 to match Habitat-Lab.
+- Habitat-Lab and the local `simulator` package are installed in editable mode.
+- Linux and macOS environments include their respective OpenMP runtime
+  dependencies for Open3D.

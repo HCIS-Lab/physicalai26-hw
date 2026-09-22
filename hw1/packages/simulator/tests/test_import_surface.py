@@ -39,7 +39,7 @@ def test_import_surface():
 
 
 def test_temporal_scheduler_is_gone():
-    """UncertaintyScheduler / windows.json were deleted (plan.md §3.1) — a
+    """UncertaintyScheduler / windows.json were deleted (HW1 specification §3.1) — a
     leftover import path would let a stale caller silently keep the temporal
     regime alive."""
     import simulator

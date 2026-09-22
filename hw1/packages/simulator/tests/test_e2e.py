@@ -1,12 +1,11 @@
-"""Simulator pipeline e2e (plan.md "test_e2e.py spec" — the REAL integration gate).
+"""Simulator pipeline e2e (HW1 specification "test_e2e.py spec" — the REAL integration gate).
 
-Cases 1-8: replay smoke, determinism, baseline invariance OUTSIDE zones, effects
-firing INSIDE zones, hard-error trajectory paths, evaluate.py two-run flow,
-headless/no-pygame.
+Cases: replay smoke, determinism, baseline invariance OUTSIDE zones, effects
+firing INSIDE zones, hard-error trajectory paths, and headless/no-pygame.
 
 FIXTURE LIMITATION — READ BEFORE ADDING A CASE. The committed 10-pose fixture is
 a pure IN-PLACE ROTATION: all ten poses sit at the same world XZ (only the
-quaternion changes). Under the spatial regime (plan.md §3.1) zone membership is
+quaternion changes). Under the spatial regime (HW1 specification §3.1) zone membership is
 a function of position alone, so this fixture CANNOT split one run into in-zone
 and out-of-zone frames — every frame is inside, or every frame is outside,
 depending on where the zone is put. The two branches are therefore exercised as
@@ -21,12 +20,11 @@ skipped suite must never read as green. Escape hatch for machines that
 legitimately lack the scene: SIM_E2E_SKIP=1 (skips loudly).
 
 Run: env -u PYTHONPATH pixi run -e habitat python -m pytest packages/simulator/tests/
-Runtime target < 2 min: 10-pose fixture (tests/fixtures/mini_secondfloor.npy,
-first 10 poses of trajectories/secondfloor.npy), 128x128 sensors.
+Runtime target < 2 min: committed 10-pose fixture
+(`tests/fixtures/mini_secondfloor.npy`), 128x128 sensors.
 """
 
 import copy
-import importlib.util
 import json
 import math
 import os
@@ -42,23 +40,27 @@ import pytest
 
 
 # ---------------------------------------------------------------------------
-# Repo-root resolution (tests may be invoked from any cwd): walk up from this
-# file to the directory holding pixi.toml AND hw1/. Both conditions are needed:
-# packages/simulator ships its own pixi.toml, and matching on that alone lands
-# two levels too deep (scene + config then resolve to nonexistent paths).
+# Project-root resolution (tests may be invoked from any cwd): support both the
+# monorepo checkout (outer pixi.toml + hw1/) and this standalone hw1 workspace
+# (pixi.toml + configs/). packages/simulator ships its own pixi.toml, so matching
+# on that alone would land too deep and resolve scene/config paths incorrectly.
 # ---------------------------------------------------------------------------
 def _find_repo_root():
     for parent in Path(__file__).resolve().parents:
         if (parent / "pixi.toml").is_file() and (parent / "hw1").is_dir():
             return parent
+        if ((parent / "pixi.toml").is_file()
+                and (parent / "configs" / "second_floor.yaml").is_file()):
+            return parent
     raise RuntimeError(
-        "could not locate repo root (no dir with pixi.toml + hw1/ above %s)" % __file__)
+        "could not locate project root (no suitable pixi.toml above %s)" % __file__)
 
 
 REPO = _find_repo_root()
-SCENE = REPO / "replica_v1" / "apartment_0" / "habitat" / "mesh_semantic.ply"
+HW1 = REPO / "hw1" if (REPO / "hw1").is_dir() else REPO
+SCENE = HW1 / "replica_v1" / "apartment_0" / "habitat" / "mesh_semantic.ply"
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "mini_secondfloor.npy"
-CONFIG_YAML = REPO / "hw1" / "configs" / "second_floor.yaml"
+CONFIG_YAML = HW1 / "configs" / "second_floor.yaml"
 FPS = 30.0
 N_POSES = 10
 
@@ -99,7 +101,7 @@ def _fixture_xz():
 # Test-local zone geometry, derived from the fixture at runtime — never
 # hardcoded scene coordinates. FLICKER_HZ is chosen so that sin(2*pi*f*i/30) is
 # nonzero for every captured frame i in 1..10 (it peaks at i=10): with the phase
-# pinned at 0 (plan.md §3.1) a frame whose sine happens to vanish is
+# pinned at 0 (HW1 specification §3.1) a frame whose sine happens to vanish is
 # bit-identical to baseline even inside a zone.
 FLICKER_HZ = 0.75
 FLICKER_AMPLITUDE = 0.9
@@ -183,20 +185,6 @@ def _read_json(path):
         return json.load(f)
 
 
-_EVALUATE_CACHE = {}
-
-
-def _load_evaluate():
-    """Import scripts/evaluate.py as a module (it is not a package member)."""
-    if "mod" not in _EVALUATE_CACHE:
-        spec = importlib.util.spec_from_file_location(
-            "evaluate_e2e", str(REPO / "scripts" / "evaluate.py"))
-        mod = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(mod)
-        _EVALUATE_CACHE["mod"] = mod
-    return _EVALUATE_CACHE["mod"]
-
-
 # ---------------------------------------------------------------------------
 # Module-scoped replay runs (Engines constructed sequentially, each closed
 # before the next — determinism/invariance need fresh Engines by design).
@@ -242,14 +230,14 @@ def test_replay_smoke(runs):
         f"(max abs diff {np.abs(gt - fixture).max():.3e})")
 
     # Every capture carries its own camera parameters and NOTHING else about
-    # the camera (plan.md D5) — no extrinsics, no uncertainty, no coupling.
+    # the camera (HW1 specification D5) — no extrinsics, no uncertainty, no coupling.
     cam = runs["cfg_inside"]["camera"]
     for cond in ("baseline", "outside", "inside1"):
         intr = _read_json(Path(runs[cond]) / "intrinsics.json")
         assert set(intr) == {"width", "height", "hfov"}, f"{cond}: {intr}"
         assert intr == {"width": int(cam["width"]), "height": int(cam["height"]),
                         "hfov": float(cam["hfov"])}, cond
-    # ...and no window ground truth is emitted any more (plan.md §3.1/D6).
+    # ...and no window ground truth is emitted any more (HW1 specification §3.1/D6).
     assert not (run / "windows.json").exists()
 
 
@@ -273,7 +261,7 @@ def test_baseline_invariance_outside_zones(runs):
     from simulator import zone_frame_counts
 
     # The zone sits 50 m from the (stationary) fixture, so no frame is in it —
-    # frames-per-zone assertion, plan.md §3.1 step 3.
+    # frames-per-zone assertion, HW1 specification §3.1 step 3.
     counts = zone_frame_counts(runs["cfg_outside"], runs["cap_outside"])
     assert counts == {"severe_test": 0, "outside": N_POSES}, counts
 
@@ -332,15 +320,13 @@ def test_effects_fire_photometry_and_depth_coupling(runs):
 
 
 # ---------------------------------------------------------------------------
-# 5. missing_trajectory_raises (evaluate collect path — hard error, no [skip])
+# 5. missing_trajectory_raises (replay API — hard error, no [skip])
 # ---------------------------------------------------------------------------
 def test_missing_trajectory_raises(tmp_path):
-    evaluate = _load_evaluate()
-    cfg = _base_config()
-    cfg["trajectory"] = str(tmp_path / "does_not_exist.npy")
-    cfg["output"]["root"] = str(tmp_path / "out")
+    from simulator import load_trajectory
+
     with pytest.raises(FileNotFoundError, match="trajectory not found"):
-        evaluate.collect(cfg, FPS)
+        load_trajectory(str(tmp_path / "does_not_exist.npy"))
 
 
 # ---------------------------------------------------------------------------
@@ -354,67 +340,7 @@ def test_json_trajectory_raises():
 
 
 # ---------------------------------------------------------------------------
-# 7. evaluate_two_run (full main flow: collect baseline+mixed, GT ref from
-#    baseline/ only, score both conditions, per-zone CSV)
-# ---------------------------------------------------------------------------
-def test_evaluate_two_run(tmp_path, monkeypatch):
-    import yaml
-
-    evaluate = _load_evaluate()
-    cfg = _base_config(covers_fixture=True)   # the zone is on the trajectory
-    data_root = tmp_path / "data"
-    out_dir = tmp_path / "eval"
-    cfg["output"]["root"] = str(data_root)
-    cfg_path = tmp_path / "e2e_config.yaml"
-    with open(cfg_path, "w") as f:
-        yaml.safe_dump(cfg, f)
-
-    monkeypatch.setattr(sys, "argv", [
-        "evaluate.py", "--config", str(cfg_path),
-        "--out-dir", str(out_dir), "--fps", str(FPS)])
-    evaluate.main()
-
-    # Both conditions captured: 10 frames + GT_pose + intrinsics.json each, and
-    # NO window ground truth anywhere (plan.md D6 — nothing else may ship).
-    for cond in ("baseline", "mixed"):
-        droot = data_root / cond
-        for kind in ("rgb", "depth"):
-            files = sorted(p.name for p in (droot / kind).glob("*.png"))
-            assert len(files) == N_POSES, f"{cond}/{kind}: {files}"
-        assert np.load(droot / "GT_pose.npy").shape == (N_POSES, 7)
-        assert set(_read_json(droot / "intrinsics.json")) == {
-            "width", "height", "hfov"}, cond
-        assert not (droot / "windows.json").exists(), cond
-        assert sorted(p.name for p in droot.iterdir()) == [
-            "GT_pose.npy", "depth", "intrinsics.json", "rgb"], cond
-
-    # results.csv: one scored row per condition. Non-empty accuracy/f columns
-    # prove the F-score step ran against the GT reference built from baseline/.
-    with open(out_dir / "results.csv") as f:
-        rows = {r["condition"]: r for r in __import__("csv").DictReader(f)}
-    assert set(rows) == {"baseline", "mixed"}
-    for cond, r in rows.items():
-        assert int(r["n_frames"]) == N_POSES
-        assert r["mean_l2"] != "", cond
-        assert r["accuracy"] != "" and r["f_score"] != "", (
-            f"{cond}: F-score empty — GT reference (from baseline/) not consumed")
-
-    # per-zone CSV: one row per configured zone + the trailing "outside" row,
-    # and the frame counts partition the capture.
-    with open(out_dir / "per_zone.csv") as f:
-        zrows = list(__import__("csv").DictReader(f))
-    names = [z["name"] for z in cfg["uncertainties"]["zones"]]
-    assert [r["zone"] for r in zrows] == names + ["outside"]
-    assert sum(int(r["n_frames"]) for r in zrows) == N_POSES
-    # The zone covers the (stationary) fixture, so every frame is inside it and
-    # the clean remainder is empty — the mirror image of the "outside" run.
-    assert int(zrows[0]["n_frames"]) == N_POSES
-    assert int(zrows[-1]["n_frames"]) == 0
-    assert zrows[0]["l2_mixed"] != ""
-
-
-# ---------------------------------------------------------------------------
-# 8. headless — must stay LAST in this module: after every Engine run above,
+# 7. headless — must stay LAST in this module: after every Engine run above,
 #    pygame was never imported (viewer is opt-in; nothing here touches it).
 # ---------------------------------------------------------------------------
 def test_z_no_pygame(runs):

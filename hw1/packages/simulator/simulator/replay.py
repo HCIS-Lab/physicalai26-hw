@@ -1,15 +1,15 @@
 """Capture I/O + trajectory replay: .npy (N,7) sensor-pose teleport replay ONLY.
 
-Action replay (.json) is deprecated — it reproduced a path only when the config's
-actuation matched the values that generated it. load_trajectory raises on .json
-with a pointer to .npy pose replay.
+JSON action trajectories are unsupported because they reproduce a path only when
+the config's actuation matches the values that generated them. load_trajectory
+raises on .json with a pointer to .npy pose replay.
 
-Contract highlights (plan.md):
+Contract highlights (HW1 specification):
 - replay_poses returns the (N,7) captured poses; the CALLER saves GT_pose.npy.
 - Missing/invalid trajectory is a hard error, never a silent skip.
-- prepare_capture_dirs is the ONE capture-writing entry point every tool goes
-  through (hw1/load.py, scripts/evaluate.py), so every capture directory carries
-  its own intrinsics.json (plan.md D5).
+- prepare_capture_dirs is the ONE capture-writing entry point used by load.py,
+  so every capture directory carries
+  its own intrinsics.json (HW1 specification D5).
 """
 
 import json
@@ -28,10 +28,9 @@ from habitat_sim.utils.common import quat_from_coeffs
 def load_trajectory(path):
     """Return the (N,7) pose array [x,y,z, qw,qx,qy,qz] from a .npy trajectory.
 
-    Action replay (.json sidecars) is deprecated: it only reproduced the path
-    when the config's actuation matched the values that generated it. A .json
-    path raises with a pointer to .npy pose replay; a missing path raises
-    FileNotFoundError (hard error — the old evaluate silently skipped)."""
+    JSON action trajectories only reproduce a path when the config's actuation
+    matches the values that generated them. A .json path raises with a pointer
+    to .npy pose replay; a missing path raises FileNotFoundError."""
     if path.endswith(".json"):
         raise ValueError(
             f"action replay (.json) is no longer supported: {path} — "
@@ -50,7 +49,7 @@ def save_intrinsics(config, data_root):
     EXACTLY those three keys, taken from config["camera"] (hfov in DEGREES).
     They are the only camera facts a capture ships: without them
     `depth_image_to_point_cloud` is unimplementable against a dataset that ships
-    with no config (plan.md D5), and they reveal nothing about how the
+    with no config (HW1 specification D5), and they reveal nothing about how the
     environment degrades — no extrinsics, no uncertainty zones, no depth
     coupling. Every capture carries its own, so reconstruction reads the
     intrinsics of the capture it is reconstructing and cannot unproject one
@@ -69,8 +68,8 @@ def prepare_capture_dirs(config, data_root):
 
     Makes <data_root>/{rgb,depth} (+ semantic/ when output.save_semantic), then
     writes intrinsics.json next to where GT_pose.npy will land. This is the
-    shared capture path — hw1/load.py (both interactive and replay collection)
-    and scripts/evaluate.py (both runs of the two-run flow) go through it, so no
+    shared capture path — load.py (both interactive and replay collection) goes
+    through it, so no
     tool can produce a capture without its intrinsics.
 
     WARNING: output.clear_existing deletes the whole `data_root` tree first."""

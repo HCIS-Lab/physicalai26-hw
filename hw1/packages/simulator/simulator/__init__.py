@@ -1,6 +1,6 @@
 """Config-driven Habitat-Sim core engine shared across course homeworks.
 
-Public surface (the Phase-0 interface contract — see plan.md). `viewer` is NOT
+Public surface (the Phase-0 interface contract — see HW1 specification). `viewer` is NOT
 re-exported here: it is the only module that imports pygame and must be imported
 explicitly (`from simulator import viewer`) so headless callers never touch it.
 """

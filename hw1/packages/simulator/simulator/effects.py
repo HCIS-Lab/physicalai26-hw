@@ -1,6 +1,6 @@
 """Pixel pipeline: lighting emulation, depth-sensor faults, spatial uncertainty.
 
-Contract highlights (plan.md §3.1):
+Contract highlights (HW1 specification §3.1):
 - All randomness takes an explicit numpy Generator (`rng`) — NO global np.random.
 - ZoneScheduler is SPATIAL, not temporal: the effect an agent sees depends on
   WHERE it is, not on when it got there. active(t, position) is a pure function
@@ -223,7 +223,7 @@ def process_observations(obs, config, t=0.0, rng=None, overrides=None):
     so the per-section merge is the deep merge.
 
     `rng` is the per-frame Generator for depth faults; if None it defaults to
-    np.random.default_rng(0) so legacy no-rng calls stay deterministic.
+    np.random.default_rng(0) so no-rng calls stay deterministic.
 
     "birdseye" and "semantic" are None when `obs` lacks the corresponding
     sensor (engine.make_cfg only attaches them when display.show_birdseye /
@@ -253,7 +253,7 @@ def process_observations(obs, config, t=0.0, rng=None, overrides=None):
 
 
 # =============================================================================
-# Spatial uncertainty: hard-edged circular flicker zones (plan.md §3.1)
+# Spatial uncertainty: hard-edged circular flicker zones (HW1 specification §3.1)
 # =============================================================================
 OUTSIDE = "outside"   # reserved key/label for "in no zone at all"
 
@@ -370,7 +370,7 @@ class ZoneScheduler:
         if mode != "spatial":
             raise ValueError(
                 f"uncertainties.mode must be 'spatial' (got {mode!r}) — the "
-                "temporal window scheduler was removed in plan.md §3.1")
+                "temporal window scheduler was removed in HW1 specification §3.1")
         self.enabled = bool(cfg.get("enabled", True))
         self.zones = _parse_zones(cfg.get("zones"))
 
@@ -430,7 +430,7 @@ def zone_frame_counts(config, poses):
 
     Returns {zone_name: n_frames, ..., "outside": n_frames_in_no_zone} — every
     configured zone is present (0 if the trajectory misses it) and the counts
-    sum to len(poses). Zone placement is validated with this (plan.md §3.1
+    sum to len(poses). Zone placement is validated with this (HW1 specification §3.1
     step 3): assert every zone is entered, that no zone swallows the episode,
     and that a meaningful number of frames stay outside — those clean frames
     are the within-capture control the whole analysis rests on. A zone the

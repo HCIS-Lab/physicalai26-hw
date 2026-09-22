@@ -8,7 +8,7 @@ skipped and pygame uses its default Cocoa driver. Callers must also
 construct Engine BEFORE initializing the viewer window, and must never
 import pygame directly — always through this module.
 
-PERFORMANCE: `Preview` is the incremental painter hw1/load.py drives. It keeps a
+PERFORMANCE: `Preview` is the incremental painter load.py drives. It keeps a
 copy of every panel as last painted, re-blits only the panels whose pixels
 changed, and pushes only those rects to the window (display.update(rects)
 instead of a full flip). Standing still outside a flicker zone only the depth

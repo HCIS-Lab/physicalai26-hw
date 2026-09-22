@@ -132,7 +132,7 @@ def run_interactive(engine, viewer, preview, fps, data_root, out_cfg):
 def report_zone_coverage(config, scheduler, data_root):
     """Print how many captured frames landed in each uncertainty zone.
 
-    This is the plan.md §3.1 step-3 check made visible at collection time: a
+    This is the HW1 specification §3.1 step-3 check made visible at collection time: a
     zone the capture never enters fires on nothing, and the run silently
     degenerates to a clean baseline."""
     from simulator import OUTSIDE, zone_frame_counts

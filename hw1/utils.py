@@ -40,13 +40,127 @@ CAM_TO_GT_AXES = np.diag([1.0, -1.0, -1.0])
 
 
 def load_depth_meters(depth_path):
-    # TODO: Load the depth image and convert it to metres.
-    raise NotImplementedError("Implement load_depth_meters")
+    """Read a depth PNG from disk and return it as a float64 depth map in metres.
+
+    SPEC:
+        Read `depth_path` preserving the on-disk bit depth (cv2.IMREAD_UNCHANGED).
+        - If the read fails, return None.
+        - If the image has 3 channels, collapse to the first channel.
+        - Auto-detect the encoding by dtype and convert to METRES:
+            * uint16  -> millimetres:      value / DEPTH_SCALE (1000.0).
+            * anything else (uint8 vis) -> Habitat 8-bit vis: value / 255.0 * 10.0.
+        Return a float64 H*W array (or None on read failure).
+
+    SHIPS WORKING — the code below is the reference implementation. Not a stub;
+    you do not write this one.
+    """
+    d = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+    if d is None:
+        return None
+    if d.ndim == 3:
+        d = d[:, :, 0]
+    if d.dtype == np.uint16:
+        return d.astype(np.float64) / DEPTH_SCALE          # mm → m
+    return d.astype(np.float64) / 255.0 * 10.0             # 8-bit vis → m
 
 
 def depth_image_to_point_cloud(rgb, depth_m, width, height, hfov, keep_mask=None):
-    # TODO: Back-project the RGB-D frame into a colored point cloud.
-    raise NotImplementedError("Implement depth_image_to_point_cloud")
+    """
+    Back-project one RGB-D frame into a colored 3-D point cloud.
+
+    CONTRACT
+        Inputs
+            rgb     : H*W*3 uint8, channels in **BGR** order (cv2.imread order).
+            depth_m : H*W float array, depth in **METRES** (see load_depth_meters).
+                      Both arrays describe the same frame and share H and W.
+            width   : int, PIXELS   — sensor width  from the capture's intrinsics.
+            height  : int, PIXELS   — sensor height from the capture's intrinsics.
+            hfov    : float, DEGREES — horizontal field of view, ditto.
+                      These three are the capture's camera parameters and they are
+                      ORDINARY ARGUMENTS: the caller reads them from the
+                      `intrinsics.json` sitting in the capture directory being
+                      reconstructed and passes them down. This function opens no
+                      files, reads no config, and assumes no resolution or FOV.
+                      The provided phase-1 capture and anything collected in phase 2
+                      each carry their own, so the same code path serves both floors
+                      and cannot unproject one floor's depth through another
+                      floor's camera.
+
+        Output
+            o3d.geometry.PointCloud carrying BOTH `.points` and `.colors`:
+              points : (N,3) float64, **metres**, in this frame's CAMERA frame —
+                       +X right, +Y down, +Z forward into the scene (image axes).
+              colors : (N,3) float in [0,1], **RGB** order (i.e. the channel order
+                       is reversed relative to the `rgb` argument).
+
+        Validity
+            A pixel contributes a point iff `depth_m > 0`. Zero (and any negative)
+            depth means "no return" and is dropped — depth dropout is one of the
+            failure modes this assignment measures, so it must not become a point
+            at the origin.
+
+        Invariants
+            * (height, width) == depth_m.shape == rgb.shape[:2]. The intrinsics
+              describe THIS image; a mismatch is a caller bug, not something to
+              paper over by falling back on the array shape.
+            * len(points) == len(colors) == number of valid pixels.
+            * Every returned point has z > 0 (a point with z <= 0 means the
+              validity mask was not applied).
+            * Points appear in row-major pixel order (row 0 left-to-right first).
+            * N == 0 is legal: an all-invalid depth map yields an EMPTY cloud, not
+              an exception.
+            * Pure: `rgb` and `depth_m` must not be modified.
+
+        Geometry
+            A pinhole camera with square pixels, no skew and no distortion; the
+            principal point is the image centre. The focal length in pixels follows
+            from `width` and `hfov` alone, and the vertical focal length equals the
+            horizontal one — so (width, height, hfov) fully determines the model.
+            Do the projection yourself: Open3D's projection helpers
+            (create_from_depth_image / create_from_rgbd_image,
+            PinholeCameraIntrinsic, ...) are OFF-LIMITS here — the mapping from
+            (u, v, depth) to (X, Y, Z) is the thing being learned.
+            Reference: https://en.wikipedia.org/wiki/Pinhole_camera_model
+
+        Smoke fixture: hw1/tests/fixtures/ ships five synthetic frames whose exact
+        clouds are known. `expected.json -> cloud_stats` gives the point count,
+        AABB and centroid of each full cloud, and `clouds.npz` holds the clouds
+        themselves for a point-for-point comparison — so you can check this
+        function on its own, before touching reconstruct(). See the README there.
+    """
+    h, w = depth_m.shape
+    if (height, width) != (h, w):
+        raise ValueError(
+            f"intrinsics ({width}x{height}) do not match the frame ({w}x{h}) — "
+            "intrinsics.json belongs to a different capture")
+
+    # Validity mask: raw 0 (and anything negative) is the sensor's "no return",
+    # not a 0 m reading, so it must not become a point at the camera origin.
+    valid = depth_m > 0
+    if keep_mask is not None:
+        keep = np.asarray(keep_mask, dtype=bool)
+        if keep.shape != depth_m.shape:
+            raise ValueError(
+                f"keep_mask shape {keep.shape} does not match depth {depth_m.shape}")
+        valid &= keep
+    Z = depth_m[valid].astype(np.float64)
+    rgb_v = rgb[valid]
+
+    # Pinhole, square pixels, no skew/distortion, principal point at the centre.
+    # fx == fy, so (width, height, hfov) fully determines the model.
+    fx = fy = (width / 2.0) / np.tan(np.radians(hfov / 2.0))
+    cx, cy = width / 2.0, height / 2.0
+
+    # Row-major pixel order falls out of the boolean mask over the meshgrid.
+    u_grid, v_grid = np.meshgrid(np.arange(w), np.arange(h))
+    X = (u_grid[valid] - cx) * Z / fx
+    Y = (v_grid[valid] - cy) * Z / fy
+
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(np.column_stack([X, Y, Z]))
+    pcd.colors = o3d.utility.Vector3dVector(
+        rgb_v.astype(np.float64)[:, ::-1] / 255.0)          # BGR -> RGB, [0,1]
+    return pcd
 
 
 def preprocess_point_cloud(pcd, voxel_size):
@@ -68,10 +182,23 @@ def preprocess_point_cloud(pcd, voxel_size):
         Return (pcd_down, fpfh). The feature radius must exceed the normal radius.
         WIKI: https://en.wikipedia.org/wiki/Point_Feature_Histograms
 
-    Implement this function.
+    SHIPS WORKING — the code below is the reference implementation. Not a stub;
+    you do not write this one.
     """
-    # TODO: Downsample the cloud, estimate normals, and compute FPFH features.
-    raise NotImplementedError("Implement preprocess_point_cloud")
+    pcd_down = pcd.voxel_down_sample(voxel_size)
+
+    # Normal estimation for ICP (Point-to-Plane) and FPFH
+    pcd_down.estimate_normals(
+        o3d.geometry.KDTreeSearchParamHybrid(
+            radius=voxel_size * 2.0, max_nn=30))
+
+    # FPFH feature (Fast Point Feature Histogram)
+    fpfh = o3d.pipelines.registration.compute_fpfh_feature(
+        pcd_down,
+        o3d.geometry.KDTreeSearchParamHybrid(
+            radius=voxel_size * 5.0, max_nn=100))
+
+    return pcd_down, fpfh
 
 
 def global_registration(source_down, target_down, source_fpfh,
@@ -96,10 +223,29 @@ def global_registration(source_down, target_down, source_fpfh,
         reconstruct() `robust` note.)
         WIKI: https://en.wikipedia.org/wiki/Random_sample_consensus
 
-    Implement this function.
+    SHIPS WORKING — the code below is the reference implementation. Not a stub;
+    you do not write this one.
     """
-    # TODO: Estimate a coarse rigid transform with feature-based registration.
-    raise NotImplementedError("Implement global_registration")
+    dist_thr = voxel_size * 1.5
+
+    result = o3d.pipelines.registration.registration_ransac_based_on_feature_matching(
+        source_down, target_down,
+        source_fpfh, target_fpfh,
+        mutual_filter=True,
+        max_correspondence_distance=dist_thr,
+        estimation_method=o3d.pipelines.registration
+            .TransformationEstimationPointToPoint(False),
+        ransac_n=3,
+        checkers=[
+            o3d.pipelines.registration
+                .CorrespondenceCheckerBasedOnEdgeLength(0.9),
+            o3d.pipelines.registration
+                .CorrespondenceCheckerBasedOnDistance(dist_thr),
+        ],
+        criteria=o3d.pipelines.registration
+            .RANSACConvergenceCriteria(100000, 0.999))
+
+    return result
 
 
 def local_icp_algorithm(source_down, target_down, trans_init, threshold):
@@ -125,10 +271,24 @@ def local_icp_algorithm(source_down, target_down, trans_init, threshold):
         Return the RegistrationResult (`.transformation` is the refined 4*4).
         WIKI: https://en.wikipedia.org/wiki/Iterative_closest_point
 
-    Implement this function.
+    SHIPS WORKING — the code below is the reference implementation. Not a stub;
+    you do not write this one.
     """
-    # TODO: Refine the initial transform with local ICP.
-    raise NotImplementedError("Implement local_icp_algorithm")
+    # Guarantee normals exist on both clouds
+    for pcd in (source_down, target_down):
+        if not pcd.has_normals():
+            pcd.estimate_normals(
+                o3d.geometry.KDTreeSearchParamHybrid(
+                    radius=threshold * 2, max_nn=30))
+
+    result = o3d.pipelines.registration.registration_icp(
+        source_down, target_down,
+        threshold, trans_init,
+        o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+        o3d.pipelines.registration.ICPConvergenceCriteria(
+            max_iteration=100))
+
+    return result
 
 
 def multiscale_icp(source_down, target_down, trans_init,
@@ -148,10 +308,24 @@ def multiscale_icp(source_down, target_down, trans_init,
         same attribute an Open3D RegistrationResult exposes, so callers are uniform.
         WIKI: https://en.wikipedia.org/wiki/Iterative_closest_point
 
-    Implement this function.
+    SHIPS WORKING — the code below is the reference implementation. Not a stub;
+    you do not write this one.
     """
-    # TODO: Refine the initial transform through a coarse-to-fine ICP schedule.
-    raise NotImplementedError("Implement multiscale_icp")
+    for pcd in (source_down, target_down):
+        if not pcd.has_normals():
+            pcd.estimate_normals(
+                o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+    T = trans_init
+    for thr in thresholds:
+        T = o3d.pipelines.registration.registration_icp(
+            source_down, target_down, thr, T,
+            o3d.pipelines.registration.TransformationEstimationPointToPlane(),
+            o3d.pipelines.registration.ICPConvergenceCriteria(
+                max_iteration=max_iter)).transformation
+    class _Result:
+        def __init__(self, transformation):
+            self.transformation = transformation
+    return _Result(T)
 
 
 def my_local_icp_algorithm(source_down, target_down, trans_init, voxel_size):
@@ -177,10 +351,61 @@ def my_local_icp_algorithm(source_down, target_down, trans_init, voxel_size):
         Return a duck-typed object with `.transformation` = final 4*4 T.
         WIKI: https://en.wikipedia.org/wiki/Kabsch_algorithm
 
-    Implement this function.
+    REFERENCE IMPL (peer session) — carved to a TODO stub in the student pass.
     """
-    # TODO: Implement point-to-point ICP without Open3D registration calls.
-    raise NotImplementedError("Implement my_local_icp_algorithm")
+    threshold    = voxel_size * 1.5
+    max_iter     = 60
+    tolerance    = 1e-6
+
+    src = np.asarray(source_down.points, dtype=np.float64)   # N*3
+    tgt = np.asarray(target_down.points, dtype=np.float64)   # M*3
+
+    T = trans_init.copy().astype(np.float64)
+    tree = cKDTree(tgt)
+    prev_err = np.inf
+
+    for _it in range(max_iter):
+        R_cur  = T[:3, :3]
+        t_cur  = T[:3, 3]
+        src_t  = (R_cur @ src.T).T + t_cur          # N*3
+
+        dists, idx = tree.query(src_t, k=1, workers=1)
+
+        mask = dists < threshold
+        if mask.sum() < 10:
+            break
+
+        P = src_t[mask]
+        Q = tgt[idx[mask]]
+
+        p_bar = P.mean(axis=0)
+        q_bar = Q.mean(axis=0)
+        Pc = P - p_bar
+        Qc = Q - q_bar
+
+        H        = Pc.T @ Qc
+        U, _, Vt = np.linalg.svd(H)
+        R_delta  = Vt.T @ U.T
+        if np.linalg.det(R_delta) < 0:
+            Vt[-1, :] *= -1
+            R_delta = Vt.T @ U.T
+        t_delta = q_bar - R_delta @ p_bar
+
+        T_delta          = np.eye(4)
+        T_delta[:3, :3]  = R_delta
+        T_delta[:3,  3]  = t_delta
+        T                = T_delta @ T
+
+        mean_err = dists[mask].mean()
+        if abs(prev_err - mean_err) < tolerance:
+            break
+        prev_err = mean_err
+
+    class _Result:
+        def __init__(self, transformation):
+            self.transformation = transformation
+
+    return _Result(T)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

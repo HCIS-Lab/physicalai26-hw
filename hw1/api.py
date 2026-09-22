@@ -91,15 +91,13 @@ def frame_mean_value(rgb_path):
 
 
 def frame_clip_hi_fraction(rgb_path, tau_hi):
-    """HighlightClipping: |{V >= tau_hi}| / N, LowerIsBetter, Pass iff <= maxClipHiFraction. tau_hi has no default. Full contract: docs/factors.md."""
-    V = _value_channel(rgb_path)
-    return float(np.count_nonzero(V >= tau_hi)) / float(V.size)
+    # TODO: Measure the high-end RGB clipping fraction.
+    raise NotImplementedError("Implement frame_clip_hi_fraction")
 
 
 def frame_clip_lo_fraction(rgb_path, tau_lo):
-    """ShadowClipping: |{V <= tau_lo}| / N, LowerIsBetter, Pass iff <= maxClipLoFraction. tau_lo has no default. Full contract: docs/factors.md."""
-    V = _value_channel(rgb_path)
-    return float(np.count_nonzero(V <= tau_lo)) / float(V.size)
+    # TODO: Measure the low-end RGB clipping fraction.
+    raise NotImplementedError("Implement frame_clip_lo_fraction")
 
 
 # =============================================================================
@@ -135,339 +133,118 @@ def _flag_mask(flagged):
 
 
 def _fully_valid_3x3(valid):
-    if valid.shape[0] < 3 or valid.shape[1] < 3:
-        return np.zeros((0, 0), dtype=bool)
-    return (valid[:-2, :-2] & valid[:-2, 1:-1] & valid[:-2, 2:] &
-            valid[1:-1, :-2] & valid[1:-1, 1:-1] & valid[1:-1, 2:] &
-            valid[2:, :-2] & valid[2:, 1:-1] & valid[2:, 2:])
+    # TODO: Determine which pixel-centred 3x3 windows are fully valid.
+    raise NotImplementedError("Implement _fully_valid_3x3")
 
 
 def _high_frequency_depth_residual(depth_path, residual_mask_k):
-    """Shared scalar/mask core of HighFrequencyDepthResidual (Immerkaer, metres, LowerIsBetter). Full contract: docs/factors.md."""
-    metres, valid = _consumer_depth_metres_valid(depth_path)
-    flagged = np.zeros(valid.shape, dtype=bool)
-    windows = _fully_valid_3x3(valid)
-    if not windows.any():
-        return float("inf"), _flag_mask(flagged)
-
-    response = (metres[:-2, :-2] - 2.0 * metres[:-2, 1:-1] + metres[:-2, 2:] -
-                2.0 * metres[1:-1, :-2] + 4.0 * metres[1:-1, 1:-1] -
-                2.0 * metres[1:-1, 2:] + metres[2:, :-2] -
-                2.0 * metres[2:, 1:-1] + metres[2:, 2:])
-    absolute = np.abs(response)
-    contributing = absolute[windows]
-    median_abs = float(np.median(contributing))
-    value = median_abs / (_IMMERKAER_NORM * _MAD_TO_SIGMA)
-
-    k = float(residual_mask_k)
-    if not np.isfinite(k) or k < 0:
-        raise ValueError("residualMaskK must be a finite non-negative number")
-    # Quantised, perfectly planar input has median_abs == 0.  In that case a
-    # literal zero threshold would turn every real step edge into noise, so use
-    # one millimetre-response quantum as the minimum actionable residual.
-    threshold = max(k * median_abs, 1.0 / _DEPTH_SCALE)
-    centres = windows & (absolute > threshold)
-    flagged[1:-1, 1:-1] = centres
-    return value, _flag_mask(flagged)
+    # TODO: Compute the high-frequency depth residual and its mask.
+    raise NotImplementedError("Implement _high_frequency_depth_residual")
 
 
 def frame_high_frequency_depth_residual(depth_path, residual_mask_k=5.0):
-    """Robust high-frequency depth residual in metres (LowerIsBetter). Student-implemented (README.md S5.2). Full contract: docs/factors.md."""
-    return _high_frequency_depth_residual(depth_path, residual_mask_k)[0]
+    # TODO: Measure the high-frequency depth residual.
+    raise NotImplementedError("Implement frame_high_frequency_depth_residual")
 
 
 def frame_high_frequency_depth_residual_mask(depth_path, residual_mask_k=5.0):
-    """255 where HighFrequencyDepthResidual recommends dropping a pixel. Full contract: docs/factors.md."""
-    return _high_frequency_depth_residual(depth_path, residual_mask_k)[1]
+    # TODO: Produce the high-frequency depth residual mask.
+    raise NotImplementedError("Implement frame_high_frequency_depth_residual_mask")
 
 
 def _local_extrema(values, valid, radius):
-    """Window min/max without scipy; invalid samples never become extrema."""
-    h, w = values.shape
-    lo = np.full((h, w), np.inf, dtype=np.float64)
-    hi = np.full((h, w), -np.inf, dtype=np.float64)
-    padded_v = np.pad(values, radius, mode="edge")
-    padded_ok = np.pad(valid, radius, mode="constant", constant_values=False)
-    for dy in range(2 * radius + 1):
-        for dx in range(2 * radius + 1):
-            sample = padded_v[dy:dy + h, dx:dx + w]
-            ok = padded_ok[dy:dy + h, dx:dx + w]
-            lo = np.minimum(lo, np.where(ok, sample, np.inf))
-            hi = np.maximum(hi, np.where(ok, sample, -np.inf))
-    return lo, hi
+    # TODO: Compute local extrema over valid depth samples.
+    raise NotImplementedError("Implement _local_extrema")
 
 
 def _flying_pixel_ratio(depth_path, window, planarity_tol):
-    """Shared scalar/mask core of FlyingPixelRatio (fraction, LowerIsBetter). Full contract: docs/factors.md."""
-    metres, valid = _consumer_depth_metres_valid(depth_path)
-    flagged = np.zeros(valid.shape, dtype=bool)
-    if not valid.any():
-        return float("inf"), _flag_mask(flagged)
-
-    size = int(round(float(window)))
-    if size < 3 or size % 2 == 0:
-        raise ValueError("flyingPixelWindow must be an odd integer >= 3")
-    tol = float(planarity_tol)
-    if not np.isfinite(tol) or tol <= 0:
-        raise ValueError("flyingPixelPlanarityTol must be finite and > 0 metres")
-
-    radius = size // 2
-    local_lo, local_hi = _local_extrema(metres, valid, radius)
-    candidates = np.argwhere(valid & ((local_hi - local_lo) > 2.0 * tol))
-    h, w = valid.shape
-    for y, x in candidates:
-        y0, y1 = max(0, y - radius), min(h, y + radius + 1)
-        x0, x1 = max(0, x - radius), min(w, x + radius + 1)
-        ok = valid[y0:y1, x0:x1].copy()
-        ok[y - y0, x - x0] = False
-        yy, xx = np.nonzero(ok)
-        if len(yy) < 6:
-            continue
-        z = metres[y0:y1, x0:x1][ok]
-
-        # Split at the largest depth gap.  A real discontinuity supplies two
-        # locally planar populations; a mixed/flying centre belongs to neither.
-        order = np.argsort(z)
-        sorted_z = z[order]
-        gaps = np.diff(sorted_z)
-        if gaps.size == 0:
-            continue
-        split_at = int(np.argmax(gaps)) + 1
-        if gaps[split_at - 1] <= 2.0 * tol:
-            continue
-        low_idx, high_idx = order[:split_at], order[split_at:]
-        if len(low_idx) < 3 or len(high_idx) < 3:
-            continue
-
-        coords = np.column_stack([xx + x0 - x, yy + y0 - y,
-                                  np.ones(len(xx), dtype=np.float64)])
-        try:
-            low_plane = np.linalg.lstsq(coords[low_idx], z[low_idx], rcond=None)[0]
-            high_plane = np.linalg.lstsq(coords[high_idx], z[high_idx], rcond=None)[0]
-        except np.linalg.LinAlgError:
-            continue
-        low_pred = float(low_plane[2])
-        high_pred = float(high_plane[2])
-        if abs(high_pred - low_pred) <= 2.0 * tol:
-            continue
-        centre = float(metres[y, x])
-        if (min(low_pred, high_pred) - tol <= centre <=
-                max(low_pred, high_pred) + tol and
-                min(abs(centre - low_pred), abs(centre - high_pred)) > tol):
-            flagged[y, x] = True
-
-    return float(np.count_nonzero(flagged)) / float(flagged.size), _flag_mask(flagged)
+    # TODO: Compute the flying-pixel ratio and its mask.
+    raise NotImplementedError("Implement _flying_pixel_ratio")
 
 
 def frame_flying_pixel_ratio(depth_path, flying_pixel_window=5,
                              flying_pixel_planarity_tol=0.03):
-    """Planar-fit-discriminated flying-pixel fraction (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _flying_pixel_ratio(
-        depth_path, flying_pixel_window, flying_pixel_planarity_tol)[0]
+    # TODO: Measure the flying-pixel ratio.
+    raise NotImplementedError("Implement frame_flying_pixel_ratio")
 
 
 def frame_flying_pixel_ratio_mask(depth_path, flying_pixel_window=5,
                                   flying_pixel_planarity_tol=0.03):
-    """255 where FlyingPixelRatio recommends dropping a pixel. Full contract: docs/factors.md."""
-    return _flying_pixel_ratio(
-        depth_path, flying_pixel_window, flying_pixel_planarity_tol)[1]
+    # TODO: Produce the flying-pixel mask.
+    raise NotImplementedError("Implement frame_flying_pixel_ratio_mask")
 
 
 def _valid_tile_coverage(depth_path, tile_size, tile_valid_floor):
-    """Shared scalar/mask core of ValidTileCoverage (fraction, HigherIsBetter). Full contract: docs/factors.md."""
-    metres, valid = _consumer_depth_metres_valid(depth_path)
-    del metres
-    size = int(round(float(tile_size)))
-    if size <= 0:
-        raise ValueError("tileSize must be a positive integer")
-    floor = float(tile_valid_floor)
-    if not 0.0 <= floor <= 1.0:
-        raise ValueError("tileValidFloor must lie in [0, 1]")
-    flagged = np.zeros(valid.shape, dtype=bool)
-    h, w = valid.shape
-    total = supported = 0
-    for y0 in range(0, h, size):
-        for x0 in range(0, w, size):
-            tile = valid[y0:min(h, y0 + size), x0:min(w, x0 + size)]
-            total += 1
-            ok = bool(tile.size and float(np.mean(tile)) >= floor)
-            supported += int(ok)
-            if not ok:
-                flagged[y0:min(h, y0 + size), x0:min(w, x0 + size)] = True
-    value = 0.0 if total == 0 else float(supported) / float(total)
-    return value, _flag_mask(flagged)
+    # TODO: Compute valid depth-tile coverage and its mask.
+    raise NotImplementedError("Implement _valid_tile_coverage")
 
 
 def frame_valid_tile_coverage(depth_path, tile_size=64, tile_valid_floor=0.5):
-    """Supported-tile fraction (HigherIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _valid_tile_coverage(depth_path, tile_size, tile_valid_floor)[0]
+    # TODO: Measure valid depth-tile coverage.
+    raise NotImplementedError("Implement frame_valid_tile_coverage")
 
 
 def frame_valid_tile_coverage_mask(depth_path, tile_size=64,
                                    tile_valid_floor=0.5):
-    """255 over every tile below the valid-return floor. Full contract: docs/factors.md."""
-    return _valid_tile_coverage(depth_path, tile_size, tile_valid_floor)[1]
+    # TODO: Produce the valid depth-tile coverage mask.
+    raise NotImplementedError("Implement frame_valid_tile_coverage_mask")
 
 
 def _identity_median_depth_change(d0_path, d1_path, change_mask_k):
-    """Shared scalar/mask/count core of IdentityMedianDepthChange (metres, LowerIsBetter). Full contract: docs/factors.md."""
-    d0, v0 = _consumer_depth_metres_valid(d0_path)
-    d1, v1 = _consumer_depth_metres_valid(d1_path)
-    flagged = np.zeros(d0.shape, dtype=bool)
-    if d0.shape != d1.shape:
-        return float("inf"), _flag_mask(flagged), 0
-    joint = v0 & v1
-    count = int(np.count_nonzero(joint))
-    if count == 0:
-        return float("inf"), _flag_mask(flagged), 0
-    change = np.abs(d0 - d1)
-    values = change[joint]
-    median = float(np.median(values))
-    mad = float(np.median(np.abs(values - median)))
-    k = float(change_mask_k)
-    if not np.isfinite(k) or k < 0:
-        raise ValueError("changeMaskK must be a finite non-negative number")
-    threshold = median + k * 1.4826 * mad
-    # With a zero MAD, keep ordinary coherent motion and flag only values that
-    # exceed the median by at least one quantisation step.
-    threshold = max(threshold, median + 1.0 / _DEPTH_SCALE)
-    flagged = joint & (change > threshold)
-    return median, _flag_mask(flagged), count
+    # TODO: Compute identity depth change, its mask, and support count.
+    raise NotImplementedError("Implement _identity_median_depth_change")
 
 
 def pair_identity_median_depth_change(d0_path, d1_path, change_mask_k=3.0):
-    """Median |D0-D1| at identity in metres (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _identity_median_depth_change(d0_path, d1_path, change_mask_k)[0]
+    # TODO: Measure median depth change between an identity-aligned pair.
+    raise NotImplementedError("Implement pair_identity_median_depth_change")
 
 
 def pair_identity_median_depth_change_mask(d0_path, d1_path, change_mask_k=3.0):
-    """255 where IdentityMedianDepthChange recommends dropping a pixel. Full contract: docs/factors.md."""
-    return _identity_median_depth_change(d0_path, d1_path, change_mask_k)[1]
+    # TODO: Produce the identity median-depth-change mask.
+    raise NotImplementedError("Implement pair_identity_median_depth_change_mask")
 
 
 def _joint_valid_depth_ratio(d0_path, d1_path):
-    """Shared scalar/mask/count core of JointValidDepthRatio ([0,1], HigherIsBetter). Full contract: docs/factors.md."""
-    d0, v0 = _consumer_depth_metres_valid(d0_path)
-    d1, v1 = _consumer_depth_metres_valid(d1_path)
-    flagged = np.ones(d0.shape, dtype=bool)
-    if d0.shape != d1.shape or d0.size == 0:
-        return 0.0, _flag_mask(flagged), 0
-    joint = v0 & v1
-    count = int(np.count_nonzero(joint))
-    return float(count) / float(joint.size), _flag_mask(~joint), count
+    # TODO: Compute joint depth validity, its mask, and support count.
+    raise NotImplementedError("Implement _joint_valid_depth_ratio")
 
 
 def pair_joint_valid_depth_ratio(d0_path, d1_path):
-    """Jointly-valid depth fraction in [0,1] (HigherIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _joint_valid_depth_ratio(d0_path, d1_path)[0]
+    # TODO: Measure the jointly valid depth ratio.
+    raise NotImplementedError("Implement pair_joint_valid_depth_ratio")
 
 
 def pair_joint_valid_depth_ratio_mask(d0_path, d1_path):
-    """255 where a pixel is NOT valid in both frames. Full contract: docs/factors.md."""
-    return _joint_valid_depth_ratio(d0_path, d1_path)[1]
+    # TODO: Produce the jointly valid depth mask.
+    raise NotImplementedError("Implement pair_joint_valid_depth_ratio_mask")
 
 
 def _camera_intrinsics(intrinsics, shape):
-    """Accept the capture dict, a (width,height,hfov) tuple, or a 3x3 K."""
-    h, w = shape
-    arr = np.asarray(intrinsics) if not isinstance(intrinsics, dict) else None
-    if arr is not None and arr.shape == (3, 3):
-        return float(arr[0, 0]), float(arr[1, 1]), float(arr[0, 2]), float(arr[1, 2])
-    if isinstance(intrinsics, dict):
-        width = int(intrinsics["width"])
-        height = int(intrinsics["height"])
-        hfov = float(intrinsics["hfov"])
-    else:
-        width, height, hfov = intrinsics
-        width, height, hfov = int(width), int(height), float(hfov)
-    if (height, width) != (h, w):
-        raise ValueError(
-            f"intrinsics ({width}x{height}) do not match depth raster ({w}x{h})")
-    fx = fy = (width / 2.0) / np.tan(np.radians(hfov / 2.0))
-    return fx, fy, width / 2.0, height / 2.0
+    # TODO: Normalize supported intrinsic-camera representations.
+    raise NotImplementedError("Implement _camera_intrinsics")
 
 
 def _prior_warp(d0_m, d1_m, prior_T, intrinsics, depth_gate):
-    """Warp depth-0 pixels into depth 1; residual/support/projected rasters at source coordinates. Full contract: docs/factors.md."""
-    d0 = np.asarray(d0_m, dtype=np.float64)
-    d1 = np.asarray(d1_m, dtype=np.float64)
-    if d0.shape != d1.shape or d0.ndim != 2:
-        raise ValueError("prior-warp depth rasters must be same-shape HxW arrays")
-    gate = float(depth_gate)
-    if not np.isfinite(gate) or gate <= 0:
-        raise ValueError("priorWarpDepthGate must be finite and > 0 metres")
-    fx, fy, cx, cy = _camera_intrinsics(intrinsics, d0.shape)
-    transform = np.asarray(prior_T, dtype=np.float64)
-    if transform.shape != (4, 4) or not np.isfinite(transform).all():
-        raise ValueError("prior_T must be a finite 4x4 transform")
-
-    source_valid = d0 > 0
-    y, x = np.nonzero(source_valid)
-    residual = np.full(d0.shape, np.nan, dtype=np.float64)
-    support = np.zeros(d0.shape, dtype=bool)
-    projected = np.zeros(d0.shape, dtype=bool)
-    if len(x) == 0:
-        return residual, support, projected
-
-    z = d0[y, x]
-    xyz1 = np.vstack([(x - cx) * z / fx, (y - cy) * z / fy, z,
-                      np.ones(len(z), dtype=np.float64)])
-    warped = transform @ xyz1
-    wz = warped[2]
-    in_front = wz > 0
-    u = np.rint(fx * warped[0] / np.where(in_front, wz, 1.0) + cx).astype(int)
-    v = np.rint(fy * warped[1] / np.where(in_front, wz, 1.0) + cy).astype(int)
-    h, w = d0.shape
-    inside = in_front & (u >= 0) & (u < w) & (v >= 0) & (v < h)
-    src_y, src_x = y[inside], x[inside]
-    dst_y, dst_x = v[inside], u[inside]
-    warped_z = wz[inside]
-    target_z = d1[dst_y, dst_x]
-    target_valid = target_z > 0
-    src_y, src_x = src_y[target_valid], src_x[target_valid]
-    warped_z, target_z = warped_z[target_valid], target_z[target_valid]
-    if len(src_x) == 0:
-        return residual, support, projected
-
-    r = np.abs(warped_z - target_z)
-    projected[src_y, src_x] = True
-    residual[src_y, src_x] = r
-    # A point substantially behind the observed surface is occluded and is not
-    # evidence about the prior residual distribution.  Points in front remain
-    # contributing outliers and are exactly the ones the filter can remove.
-    visible = warped_z <= target_z + gate
-    support[src_y[visible], src_x[visible]] = True
-    return residual, support, projected
+    # TODO: Warp a depth frame under the prior transform.
+    raise NotImplementedError("Implement _prior_warp")
 
 
 def _prior_warp_depth_residual(d0_path, d1_path, prior_T, intrinsics, depth_gate):
-    """Shared scalar/mask/count core of PriorWarpDepthResidual (metres, LowerIsBetter). Full contract: docs/factors.md."""
-    d0, _ = _consumer_depth_metres_valid(d0_path)
-    d1, _ = _consumer_depth_metres_valid(d1_path)
-    if d0.shape != d1.shape:
-        return float("inf"), _flag_mask(np.zeros(d0.shape, dtype=bool)), 0
-    residual, support, projected = _prior_warp(
-        d0, d1, prior_T, intrinsics, depth_gate)
-    count = int(np.count_nonzero(support))
-    if count == 0:
-        return float("inf"), _flag_mask(np.zeros(d0.shape, dtype=bool)), 0
-    value = float(np.median(residual[support]))
-    flagged = projected & np.isfinite(residual) & (residual > float(depth_gate))
-    return value, _flag_mask(flagged), count
+    # TODO: Compute the prior-warp residual, its mask, and support count.
+    raise NotImplementedError("Implement _prior_warp_depth_residual")
 
 
 def pair_prior_warp_depth_residual(d0_path, d1_path, prior_T, intrinsics,
                                    prior_warp_depth_gate=0.10):
-    """Median residual under the constant-velocity prior (LowerIsBetter). Student-implemented (S5.2). Full contract: docs/factors.md."""
-    return _prior_warp_depth_residual(
-        d0_path, d1_path, prior_T, intrinsics, prior_warp_depth_gate)[0]
+    # TODO: Measure the prior-warp depth residual.
+    raise NotImplementedError("Implement pair_prior_warp_depth_residual")
 
 
 def pair_prior_warp_depth_residual_mask(d0_path, d1_path, prior_T, intrinsics,
                                         prior_warp_depth_gate=0.10):
-    """255 where the prior-warp residual exceeds the depth gate. Full contract: docs/factors.md."""
-    return _prior_warp_depth_residual(
-        d0_path, d1_path, prior_T, intrinsics, prior_warp_depth_gate)[1]
+    # TODO: Produce the prior-warp depth residual mask.
+    raise NotImplementedError("Implement pair_prior_warp_depth_residual_mask")
 
 
 # =============================================================================

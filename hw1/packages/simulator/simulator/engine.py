@@ -74,6 +74,10 @@ def make_cfg(config):
     # --- simulator backend ---
     sim_cfg = habitat_sim.SimulatorConfiguration()
     sim_cfg.scene_id = config["scene"]["path"]
+    # Habitat's EGL renderer selects a CUDA device by default. Setting this
+    # to -1 asks Magnum/Habitat to use the default non-CUDA graphics device
+    # when one is available (for example, a software EGL device).
+    sim_cfg.gpu_device_id = int(os.environ.get("HABITAT_GPU_DEVICE_ID", "-1"))
     # Physics is only needed to spawn the start-position marker object.
     sim_cfg.enable_physics = bool((config.get("marker") or {}).get("enabled", False))
 
@@ -82,6 +86,11 @@ def make_cfg(config):
     # (Choi et al.), applied in-sim before observations are returned.
     dcfg = config.get("depth") or {}
     depth_noise = "RedwoodDepthNoiseModel" if dcfg.get("redwood", False) else None
+    # Redwood's implementation explicitly runs a CUDA kernel. Disable it in
+    # CPU-device mode rather than failing later during sensor construction.
+    if depth_noise and sim_cfg.gpu_device_id < 0:
+        print("depth.redwood requested, but CUDA is disabled; using clean depth")
+        depth_noise = None
     depth_noise_kwargs = (
         {"noise_multiplier": float(dcfg.get("redwood_multiplier", 1.0))}
         if depth_noise else None)
@@ -164,14 +173,12 @@ def add_start_marker(sim, config):
 class Engine:
     """Config-driven simulator session: Simulator + agent + scheduler + RNG.
 
-    CRITICAL GOTCHA — DO NOT REMOVE THE GL WORKAROUND (Linux/X11 only)
-        On Linux, habitat-sim and pygame both want an OpenGL context on the
-        same X display, which crashes fatally with `X Error ...
-        X_GLXMakeCurrent BadAccess`. DISPLAY is hidden while
-        `habitat_sim.Simulator(...)` is constructed so habitat renders
-        offscreen on EGL instead of GLX, then restored (in a finally) so a
-        viewer can own the on-screen window. DISPLAY may legitimately be
-        unset (pure headless) — tolerated.
+    GL context setup
+        On ordinary Linux/X11, DISPLAY is hidden while the simulator is
+        constructed so Habitat uses offscreen EGL, then restored for pygame.
+        WSLg keeps DISPLAY visible: its EGL device index may not match CUDA's,
+        while its GLX display can provide the context directly. DISPLAY may
+        legitimately be unset (pure headless) — tolerated.
         On macOS there is no X display / EGL path: DISPLAY is normally unset
         and must simply be left alone (no hide/restore needed).
         The complementary fix — SDL software rendering — lives at the top of
@@ -200,9 +207,19 @@ class Engine:
         # GL workaround (Linux/X11 only): hide DISPLAY so habitat constructs
         # on offscreen EGL. On macOS there is no X display — leave the
         # environment untouched.
+        # WSLg exposes its graphics stack through DISPLAY. Hiding it forces
+        # Habitat into EGL's headless device-selection path, which can fail
+        # even when WSLg has a usable OpenGL renderer (EGL and CUDA device
+        # indices are not necessarily the same). Keep DISPLAY under WSL and
+        # use the regular GLX context there; retain the EGL workaround on
+        # ordinary Linux/X11 where pygame will create a later window.
+        is_wsl = sys.platform.startswith("linux") and (
+            "microsoft" in open("/proc/version", encoding="utf-8").read().lower()
+            or "WSL_DISTRO_NAME" in os.environ
+        )
         saved_display = os.environ.pop("DISPLAY", None) \
-            if sys.platform.startswith("linux") else None
-        hide_display = sys.platform.startswith("linux")
+            if sys.platform.startswith("linux") and not is_wsl else None
+        hide_display = sys.platform.startswith("linux") and not is_wsl
         try:
             self.sim = habitat_sim.Simulator(make_cfg(config))
         finally:

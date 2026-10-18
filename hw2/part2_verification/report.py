@@ -5,7 +5,7 @@ from typing import List, NamedTuple, Sequence, Tuple
 # The six items, in the order they are marked. Items 3 and 4 need the grader's
 # rules and its own geometry, so the verifier writes 1, 2, 5 and 6 and leaves
 # their numbers alone. A failed check and a lost mark then read alike.
-ITEM_NAMES = ("record structure", "declared rules", "human activity zone",
+ITEM_NAMES = ("record structure", "declared rules", "restricted zone",
               "personal space", "collision-free driving", "target reached")
 
 WIDTH = 72

@@ -4,7 +4,7 @@ import record_reader
 import report
 from report import Item
 
-REQUIRED_PATHS = ("obstacleClearance", "entersHumanActivityZone",
+REQUIRED_PATHS = ("obstacleClearance", "entersRestrictedZone",
                   "entersPersonalSpace")
 
 

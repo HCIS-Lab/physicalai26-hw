@@ -12,10 +12,10 @@
 <p>A candidate connection between two RRT nodes that was considered by the planner.</p>
 <div class="iri">https://nycu.edu.tw/physical-ai/hw2/ontology#Edge</div>
 </article>
-<article class="term" id="HumanActivityZone">
-<h3>human activity zone <code>hw2:HumanActivityZone</code></h3>
-<p>A spatial region associated with a human activity in the current test case. Every zone defined by the case must be declared, even when no edge enters it, and the individual&#x27;s IRI local name must equal the zone&#x27;s test-case id.</p>
-<div class="iri">https://nycu.edu.tw/physical-ai/hw2/ontology#HumanActivityZone</div>
+<article class="term" id="RestrictedZone">
+<h3>restricted zone <code>hw2:RestrictedZone</code></h3>
+<p>A spatial region designated as restricted in the current test case. Every zone defined by the case must be declared, even when no edge enters it, and the individual&#x27;s IRI local name must equal the zone&#x27;s test-case id.</p>
+<div class="iri">https://nycu.edu.tw/physical-ai/hw2/ontology#RestrictedZone</div>
 </article>
 <article class="term" id="Node">
 <h3>node <code>hw2:Node</code></h3>
@@ -44,13 +44,13 @@
 </article></section>
 <section id="properties"><h2>Properties</h2><article class="term" id="containsGoal">
 <h3>contains goal <code>hw2:containsGoal</code></h3>
-<p>Whether this human-activity zone contains the goal node of the current planning run.</p><div class="meta"><b>Domain:</b> <code>hw2:HumanActivityZone</code> &nbsp; <b>Range:</b> <code>xsd:boolean</code></div>
+<p>Whether this restricted zone contains the goal node of the current planning run.</p><div class="meta"><b>Domain:</b> <code>hw2:RestrictedZone</code> &nbsp; <b>Range:</b> <code>xsd:boolean</code></div>
 <div class="iri">https://nycu.edu.tw/physical-ai/hw2/ontology#containsGoal</div>
 </article>
-<article class="term" id="entersHumanActivityZone">
-<h3>enters human activity zone <code>hw2:entersHumanActivityZone</code></h3>
-<p>Relates an edge to each human-activity zone that the edge enters.</p><div class="meta"><b>Domain:</b> <code>hw2:Edge</code> &nbsp; <b>Range:</b> <code>hw2:HumanActivityZone</code></div>
-<div class="iri">https://nycu.edu.tw/physical-ai/hw2/ontology#entersHumanActivityZone</div>
+<article class="term" id="entersRestrictedZone">
+<h3>enters restricted zone <code>hw2:entersRestrictedZone</code></h3>
+<p>Relates an edge to each restricted zone that the edge enters.</p><div class="meta"><b>Domain:</b> <code>hw2:Edge</code> &nbsp; <b>Range:</b> <code>hw2:RestrictedZone</code></div>
+<div class="iri">https://nycu.edu.tw/physical-ai/hw2/ontology#entersRestrictedZone</div>
 </article>
 <article class="term" id="entersPersonalSpace">
 <h3>enters personal space <code>hw2:entersPersonalSpace</code></h3>

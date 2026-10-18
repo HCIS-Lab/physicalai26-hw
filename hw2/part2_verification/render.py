@@ -79,7 +79,7 @@ def draw_run(graph: Graph, map_img: np.ndarray, case: TestCase, kept: Set,
     overlay = image.copy()
 
     claims = dict(record_reader.region_claims(graph))
-    for space in case.human_activity_zones:
+    for space in case.restricted_zones:
         # Coloured by what the record claims, not by the test case, so a wrong
         # claim shows as the wrong colour over the right polygon.
         _shade(image, overlay, space.polygon,

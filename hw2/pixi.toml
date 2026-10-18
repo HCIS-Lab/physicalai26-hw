@@ -27,8 +27,6 @@ fetch-replica = { cmd = "mkdir -p replica_v1 && gdown https://drive.google.com/u
 process-map = { cmd = "python part1_planning/map_processor.py" }
 part1 = { cmd = "python part1_planning/main.py", depends-on = ["process-map"] }
 part2 = { cmd = "python part2_verification/main.py" }
-# TA only -- not distributed with the assignment.
-grade = { cmd = "python grader/grade.py" }
 
 [environments]
 habitat = { features = ["habitat"], solve-group = "habitat" }

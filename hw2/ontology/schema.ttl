@@ -49,10 +49,10 @@ hw2:PersonalSpace
     rdfs:label "personal space"@en ;
     rdfs:comment "A personal-space region associated with a person in the current test case. Every person defined by the case must be declared, even when no edge enters the space, and the individual's IRI local name must equal the person's test-case id."@en .
 
-hw2:HumanActivityZone
+hw2:RestrictedZone
     a rdfs:Class ;
-    rdfs:label "human activity zone"@en ;
-    rdfs:comment "A spatial region associated with a human activity in the current test case. Every zone defined by the case must be declared, even when no edge enters it, and the individual's IRI local name must equal the zone's test-case id."@en .
+    rdfs:label "restricted zone"@en ;
+    rdfs:comment "A spatial region designated as restricted in the current test case. Every zone defined by the case must be declared, even when no edge enters it, and the individual's IRI local name must equal the zone's test-case id."@en .
 
 
 #################################################################
@@ -132,21 +132,21 @@ hw2:entersPersonalSpace
     rdfs:domain hw2:Edge ;
     rdfs:range hw2:PersonalSpace .
 
-hw2:entersHumanActivityZone
+hw2:entersRestrictedZone
     a rdf:Property ;
-    rdfs:label "enters human activity zone"@en ;
-    rdfs:comment "Relates an edge to each human-activity zone that the edge enters."@en ;
+    rdfs:label "enters restricted zone"@en ;
+    rdfs:comment "Relates an edge to each restricted zone that the edge enters."@en ;
     rdfs:domain hw2:Edge ;
-    rdfs:range hw2:HumanActivityZone .
+    rdfs:range hw2:RestrictedZone .
 
 
 #################################################################
-# HumanActivityZone properties
+# RestrictedZone properties
 #################################################################
 
 hw2:containsGoal
     a rdf:Property ;
     rdfs:label "contains goal"@en ;
-    rdfs:comment "Whether this human-activity zone contains the goal node of the current planning run."@en ;
-    rdfs:domain hw2:HumanActivityZone ;
+    rdfs:comment "Whether this restricted zone contains the goal node of the current planning run."@en ;
+    rdfs:domain hw2:RestrictedZone ;
     rdfs:range xsd:boolean .

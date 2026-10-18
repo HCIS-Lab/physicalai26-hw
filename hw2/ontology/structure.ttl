@@ -86,8 +86,8 @@ hw2:PathEdgeStructureShape a sh:NodeShape ;
         sh:message "The claimed path forks: this edge has more than one successor on it."@en ;
     ] .
 
-hw2:HumanActivityZoneStructureShape a sh:NodeShape ;
-    sh:targetClass hw2:HumanActivityZone ;
+hw2:RestrictedZoneStructureShape a sh:NodeShape ;
+    sh:targetClass hw2:RestrictedZone ;
 
     sh:property [
         sh:path hw2:containsGoal ; sh:datatype xsd:boolean ;

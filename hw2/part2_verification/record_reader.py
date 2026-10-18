@@ -162,11 +162,11 @@ def edge_claims(graph: Graph, edge: URIRef, predicate: URIRef) -> Set[str]:
 
 
 def region_claims(graph: Graph) -> List[Tuple[str, bool]]:
-    """Each human activity zone the record names, and whether it claims the goal is
+    """Each restricted zone the record names, and whether it claims the goal is
     inside it."""
     return sorted((_name(region),
                    Literal(True) in graph.objects(region, HW2.containsGoal))
-                  for region in graph.subjects(RDF.type, HW2.HumanActivityZone))
+                  for region in graph.subjects(RDF.type, HW2.RestrictedZone))
 
 
 def region_individual(graph: Graph, region_id: str) -> Optional[URIRef]:
@@ -175,7 +175,7 @@ def region_individual(graph: Graph, region_id: str) -> Optional[URIRef]:
     The IRI's local name is that id: the record's own vocabulary carries no
     separate identifier property for a zone or a person.
     """
-    for region in graph.subjects(RDF.type, HW2.HumanActivityZone):
+    for region in graph.subjects(RDF.type, HW2.RestrictedZone):
         if _name(region) == region_id:
             return region
     return None

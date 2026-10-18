@@ -7,13 +7,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 import paths
 from scene import PROJECTION, load_scan, save_map, world_to_pixel
 
-# ANSWER START
-import cv2
-import numpy as np
-
-from scene import semantic_color
-# ANSWER END
-
 
 def main():
     parser = argparse.ArgumentParser(
@@ -38,23 +31,6 @@ def main():
     # Hints: You can start by dropping the ceiling and the floor points, and drop stray points that are not
     # really obstacles. 
     # END
-    # ANSWER START
-    surfaces = np.zeros(len(colors), dtype=bool)
-    for name in ("ceiling", "floor"):
-        surfaces |= np.all(colors == semantic_color(name), axis=1)
-
-    # A flat projection drops the wall above a doorway onto the doorway itself.
-    keep = ~surfaces & (coords[:, 1] <= 0.20)
-    coords, colors = coords[keep], colors[keep]
-
-    x_img, z_img = world_to_pixel(coords[:, 0], coords[:, 2], PROJECTION)
-    occupied = np.zeros((PROJECTION.size, PROJECTION.size), dtype=np.uint8)
-    occupied[z_img, x_img] = 1
-    neighbours = cv2.filter2D(occupied, -1, np.ones((5, 5), dtype=np.uint8))
-
-    dense = neighbours[z_img, x_img] >= 8
-    coords, colors = coords[dense], colors[dense]
-    # ANSWER END
 
     # Convert the remaining points to the pixel space. Which you will plan path on in main.py.
     x_img, z_img = world_to_pixel(coords[:, 0], coords[:, 2], PROJECTION)

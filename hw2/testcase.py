@@ -5,8 +5,8 @@ from typing import List, NamedTuple, Tuple
 WorldPoint = Tuple[float, float]
 
 
-class HumanActivityZone(NamedTuple):
-    """A floor region associated with a human activity.
+class RestrictedZone(NamedTuple):
+    """A floor region designated as restricted.
 
     The polygon is closed: the last vertex connects to the first.
     """
@@ -46,7 +46,7 @@ class TestCase(NamedTuple):
     id: str
     start_world: WorldPoint
     goal_object: str
-    human_activity_zones: List[HumanActivityZone]
+    restricted_zones: List[RestrictedZone]
     people: List[PersonalSpace]
     comment: str = ""
 
@@ -57,11 +57,11 @@ def _parse_case(raw: dict) -> TestCase:
         start_world=(float(raw["start_world"][0]), float(raw["start_world"][1])),
         goal_object=raw["goal_object"],
         comment=raw.get("comment", ""),
-        human_activity_zones=[
-            HumanActivityZone(id=space["id"],
+        restricted_zones=[
+            RestrictedZone(id=space["id"],
                             polygon=[(float(x), float(z)) for x, z in space["polygon"]],
                             comment=space.get("comment", ""))
-            for space in raw.get("human_activity_zones", [])
+            for space in raw.get("restricted_zones", [])
         ],
         people=[
             PersonalSpace(id=person["id"],

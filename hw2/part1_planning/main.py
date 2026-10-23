@@ -41,9 +41,21 @@ def main():
         # Load the map and plan the path using RRT and write its record to record_path.
         # Draw every random choice from `rng` so the run reproduces.
         # Write the record even when the search finds no path.
-        # Hint: You may need to implement the four functions to compute the geometric facts about the candidate edge and record them into an RDF graph:
-        #       obstacle_clearance(), enters_restricted_zone(), enters_personal_space(), contains_goal().
-        #       And then use the shacl rules to validate this data graph.
+        #
+        # ---------------------------------- Hints ----------------------------------
+        # For every candidate edge, record in the RDF graph:
+        #   - minimum obstacle clearance (metres)   -> hw2:obstacleClearance
+        #   - each restricted zone it enters        -> hw2:entersRestrictedZone
+        #   - each personal space it enters         -> hw2:entersPersonalSpace
+        #   - for every restricted zone, whether it contains the goal
+        #                                           -> hw2:containsGoal
+        # Then check the candidate against your ontology/rules.ttl with SHACL:
+        #   - pyshacl.validate(data_graph, shacl_graph=rules_graph)
+        #   - validate a small graph (the edge plus the zones it refers to), not the
+        #     whole record
+        #   - SHACL constraints such as sh:datatype are sensitive to the datatype of a
+        #     literal. In Turtle, an unquoted 0.25 denotes an xsd:decimal, whereas
+        #     "0.25"^^xsd:double denotes an xsd:double.
         # END
     
         print(f"{case.id} -> {record_path}" if os.path.exists(record_path)

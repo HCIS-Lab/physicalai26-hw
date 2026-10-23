@@ -1,4 +1,4 @@
-@prefix hw2:  <https://nycu.edu.tw/physical-ai/hw2/ontology#> .
+@prefix hw2:  <http://taica.course/hw2/ontology#> .
 @prefix rdf:  <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
 @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
 @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
@@ -7,7 +7,7 @@
 # Ontology
 #################################################################
 
-<https://nycu.edu.tw/physical-ai/hw2/ontology>
+<http://taica.course/hw2/ontology>
     a rdfs:Resource ;
     rdfs:label "NYCU Physical AI HW2 Planning Ontology"@en ;
     rdfs:comment "Vocabulary used in HW2 to describe an RRT planning run, including its nodes, candidate edges, accepted tree edges, final path, and measured social and geometric properties."@en .

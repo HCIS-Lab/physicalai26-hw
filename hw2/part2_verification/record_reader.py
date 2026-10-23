@@ -13,7 +13,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Fixed here, never read back out of the submitted file. A namespace typo has
 # to be reported, and a prefix read from the record would silently follow it.
-HW2 = Namespace("https://nycu.edu.tw/physical-ai/hw2/ontology#")
+HW2 = Namespace("http://taica.course/hw2/ontology#")
 SH = Namespace("http://www.w3.org/ns/shacl#")
 
 

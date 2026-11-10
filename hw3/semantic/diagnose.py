@@ -57,8 +57,13 @@ def diagnose(task_label, fk_records=(), ik_records=()):
     """Ground the records with the student's Task 1 functions, validate them
     with the student's shapes.ttl, and print the problem flags per record."""
     print('------------- Semantic diagnosis (your Task 1 layer) -------------')
+    n_total = len(list(fk_records)) + len(list(ik_records))
     fk_records = list(fk_records)[:MAX_RECORDS]
     ik_records = list(ik_records)[:MAX_RECORDS]
+    n_dropped = n_total - len(fk_records) - len(ik_records)
+    if n_dropped:
+        print('  WARNING: {} record(s) beyond MAX_RECORDS={} per kind were not '
+              'validated'.format(n_dropped, MAX_RECORDS))
     if not fk_records and not ik_records:
         print('  nothing to diagnose')
         return

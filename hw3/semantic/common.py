@@ -1,11 +1,9 @@
 # -*- coding: utf-8 -*-
 """Shared constants and helpers for the Task 1 grounding scripts (TA-provided).
 
-The three per-task grounding scripts (ground_task1_fk.py, ground_task2_ik.py,
-ground_task3_insertion.py) each produce their own knowledge graph, but they
-all speak the same vocabulary <http://taica.course/hw3/ontology#> — that is
-what lets one triple store and one set of SPARQL queries evaluate all three
-tasks together.
+Shared by ground_execution.py and diagnose.py. All records speak the vocabulary
+<http://taica.course/hw3/ontology#>; there is no triple store, each run writes
+its own Turtle file under semantic/output/.
 """
 
 import argparse
@@ -41,18 +39,12 @@ SIM_TIMESTEP = 1.0 / 240.0
 UR5_MAX_REACH = 0.90          # UR5 workspace radius (m); beyond => OUT_OF_REACH
 SHOULDER_HEIGHT = 0.0892      # DH d1: shoulder height (m)
 IK_SOLVED_THRESH = 0.02       # residual threshold for SOLVED (m)
-FK_POSE_ERROR_THRESH = 0.005  # Task 1 pose error threshold (course value)
-FK_JACOBIAN_ERROR_THRESH = 0.05  # Task 1 Jacobian error threshold (course value)
+FK_POSE_ERROR_THRESH = 0.005  # Task 2 (FK) pose error threshold (course value)
+FK_JACOBIAN_ERROR_THRESH = 0.05  # Task 2 (FK) Jacobian error threshold (course value)
 
-# Joint limits consistent with ik.py; grounded into triples in Task 1
-JOINT_LIMITS = [
-    [-3 * np.pi / 2, -np.pi / 2],   # joint1
-    [-2.3562, -1.0],                # joint2
-    [-17.0, 17.0],                  # joint3
-    [-17.0, 17.0],                  # joint4
-    [-17.0, 17.0],                  # joint5
-    [-17.0, 17.0],                  # joint6
-]
+# Joint limits: shared with ik.py via hw3_utils/joint_limits.py
+from hw3_utils.joint_limits import UR5_JOINT_LIMITS
+JOINT_LIMITS = UR5_JOINT_LIMITS.tolist()
 
 # Shared targets (exactly the same coordinates as hw3:target_* in the
 # ontology; the URIs must also be the same set, otherwise SPARQL cannot
@@ -122,7 +114,7 @@ def classify_ik_result(eef_pos_after_ik, target_pos, base_pos):
     residual = float(np.linalg.norm(
         np.asarray(eef_pos_after_ik, dtype=float) - target_pos))
 
-    if residual < IK_SOLVED_THRESH:
+    if residual <= IK_SOLVED_THRESH:   # inclusive, same as the SHACL shapes
         return 'SOLVED', residual
     if dist > UR5_MAX_REACH:
         return 'OUT_OF_REACH', residual

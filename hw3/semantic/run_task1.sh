@@ -17,7 +17,7 @@
 #   bash semantic/run_task1.sh --group ... --own    # after Tasks 2-3: use YOUR FK/IK
 #
 # Environment variables:
-#   PYTHON     python interpreter (default: python; must be the taica-hw3 env)
+#   PYTHON     python interpreter (default: python; use the pixi env: pixi run task1)
 #   JENA_HOME  an already-extracted apache-jena directory
 #              (default: auto-download into semantic/.cache)
 # =============================================================================
@@ -72,7 +72,14 @@ echo "== STEP 4/5 | SHACL validation (Jena shacl CLI) =="
 SHACL="$JENA_HOME/bin/shacl"
 run_shacl () {  # $1 shapes, $2 data, $3 out
     echo "---- shacl validate --shapes $1 --data $2 -> $3"
-    "$SHACL" validate --shapes "$1" --data "$2" > "$3" || true
+    # Jena exits non-zero when the data does not conform; that is expected.
+    # A report without sh:conforms means a parse/syntax error -> fail loudly.
+    "$SHACL" validate --shapes "$1" --data "$2" > "$3" 2> "$3.err" || true
+    if ! grep -q 'sh:conforms' "$3"; then
+        echo "ERROR: SHACL produced no report for $1 / $2 (syntax error?):" >&2
+        head -5 "$3.err" >&2
+        exit 1
+    fi
     grep -q 'sh:conforms  *true' "$3" \
         && echo "     conforms: true" \
         || echo "     conforms: false ($(grep -c 'sh:ValidationResult' "$3" || true) result(s))"

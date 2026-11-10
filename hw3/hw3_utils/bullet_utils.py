@@ -1,7 +1,6 @@
 import numpy as np
 import pybullet as p
-import quaternion
-from scipy.spatial.transform import Rotation as R
+from scipy.spatial.transform import Rotation as R, Slerp
 
 # quaternion format converter => (x, y, z, w) to (w, x, y, z)
 def xyzw2wxyz(quat : list or np.ndarray):
@@ -80,15 +79,13 @@ def get_dense_waypoints(start_config : list or tuple or np.ndarray,
     d12 = np.asarray(end_config) - np.asarray(start_config)
     d12_pos = d12[:3]
     steps = int(np.ceil(np.linalg.norm(np.divide(d12, resolution), ord=2)))
-    obj_init_quat = quaternion.as_quat_array(xyzw2wxyz(start_config[3:]))
-    obj_tgt_quat = quaternion.as_quat_array(xyzw2wxyz(end_config[3:]))
+    slerp = Slerp([0.0, 1.0], R.from_quat([start_config[3:], end_config[3:]]))
 
     ret = []
     for step in range(steps):
         ratio = (step + 1) / steps
         pos = ratio * d12_pos + np.asarray(start_config[:3])
-        quat = quaternion.slerp_evaluate(obj_init_quat, obj_tgt_quat, ratio)
-        quat = wxyz2xyzw(quaternion.as_float_array(quat))
+        quat = slerp(ratio).as_quat()  # (x, y, z, w)
         position7d = tuple(pos) + tuple(quat)
         ret.append(position7d)
 

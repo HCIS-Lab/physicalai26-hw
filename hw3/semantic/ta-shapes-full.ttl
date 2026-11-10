@@ -15,7 +15,7 @@
 #   Problem detection — discovers execution issues from numeric values:
 #                 ARM_OUT_OF_RANGE / NO_CONVERGENCE / JOINT_LIMIT_VIOLATION
 #
-# run_task4.sh validates output/data.ttl with this file and writes
+# run_task1.sh validates output/data.ttl with this file and writes
 # output/ta-validation.ttl. score_semantic.py grades message prefixes.
 # =============================================================================
 

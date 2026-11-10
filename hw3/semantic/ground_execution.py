@@ -18,7 +18,7 @@ STUDENT TODO in this file:
     ik_computation_to_triples()  — grounds an IK execution result
 (fk_computation_to_triples() is fully implemented as the worked example.)
 
-Run (inside the taica-hw3 conda environment):
+Run (inside the pixi environment, e.g. `pixi run task1`):
     python semantic/ground_execution.py --group <your group id>
     python semantic/ground_execution.py --group ... --own   # after Tasks 2-3: ground YOUR FK/IK
 """

@@ -1,20 +1,24 @@
 import argparse, time, os, json
 import numpy as np
-import math as m
 from scipy.spatial.transform import Rotation as R
-from scipy.linalg import pinv
 
 # for simulator
 import pybullet as p
 import pybullet_data
 
 # for geometry information
+from hw3_utils.joint_limits import UR5_JOINT_LIMITS
 from hw3_utils.bullet_utils import draw_coordinate, get_matrix_from_pose, get_pose_from_matrix, pose_7d_to_6d, pose_6d_to_7d
 
 # you may use your forward kinematic algorithm to compute 
 from fk import your_fk, get_ur5_DH_params
 
 SIM_TIMESTEP = 1.0 / 240.0
+HEADLESS = False
+
+def _sleep():
+    if not HEADLESS:
+        time.sleep(SIM_TIMESTEP)
 TASK3_SCORE_MAX = 40
 IK_ERROR_THRESH = 0.02
 
@@ -32,8 +36,8 @@ def pybullet_ik(robot_id, new_pose : list or tuple or np.ndarray,
         endEffectorLinkIndex=10,
         targetPosition=new_pos,
         targetOrientation=new_rot,
-        lowerLimits=[-3 * np.pi / 2, -2.3562, -17, -17, -17, -17],
-        upperLimits=[-np.pi / 2, 0, 17, 17, 17, 17],
+        lowerLimits=UR5_JOINT_LIMITS[:, 0].tolist(),
+        upperLimits=UR5_JOINT_LIMITS[:, 1].tolist(),
         jointRanges=[np.pi, 2.3562, 34, 34, 34, 34],  # * 6,
         restPoses=np.float32(np.array([-1, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi).tolist(),
         maxNumIterations=max_iters,
@@ -49,14 +53,7 @@ def your_ik(robot_id, new_pose : list or tuple or np.ndarray,
 
 
 
-    joint_limits = np.asarray([
-            [-3*np.pi/2, -np.pi/2], # joint1
-            [-2.3562, -1],           # joint2
-            [-17, 17],              # joint3
-            [-17, 17],              # joint4
-            [-17, 17],              # joint5
-            [-17, 17],              # joint6
-        ])
+    joint_limits = UR5_JOINT_LIMITS.copy()
 
     # get current joint angles and gripper pos, (gripper pos is fixed)
     num_q = p.getNumJoints(robot_id)
@@ -144,7 +141,7 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
             # warmup for 0.1 sec
             for _ in range(int(1 / SIM_TIMESTEP * 0.1)):
                 p.stepSimulation()
-                time.sleep(SIM_TIMESTEP)
+                _sleep()
 
 
             your_pose = robot.get_eef_pose()
@@ -167,7 +164,7 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
             diag_rec = ('diag_{}_{:03d}'.format(
                             test_case_name.replace('ik_test_case_', '').replace('.json', ''), i),
                         list(your_joint_poses)[:6],
-                        'MISS' if ik_error > IK_ERROR_THRESH else 'SOLVED',
+                        'NO_CONVERGENCE' if ik_error > IK_ERROR_THRESH else 'SOLVED',
                         float(ik_error),
                         float(np.linalg.norm(np.asarray(gt_pose[:3]) - shoulder)))
             if ik_error > IK_ERROR_THRESH:
@@ -204,6 +201,7 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
         from diagnose import diagnose
         diagnose('Task 3 IK', ik_records=diag_fail + diag_sample)
     except Exception as exc:
+        import traceback; traceback.print_exc()
         print('(semantic diagnosis unavailable: {})'.format(exc))
 
 def main(args):
@@ -213,7 +211,9 @@ def main(args):
     # ------------------------ #
 
     # Create pybullet GUI
-    physics_client_id = p.connect(p.GUI)
+    global HEADLESS
+    HEADLESS = args.headless
+    physics_client_id = p.connect(p.DIRECT if args.headless else p.GUI)
     p.configureDebugVisualizer(p.COV_ENABLE_GUI,0)
     p.resetDebugVisualizerCamera(
         cameraDistance=1.0,
@@ -242,7 +242,7 @@ def main(args):
     # warmup for 1 sec
     for _ in range(int(1 / SIM_TIMESTEP * 1)):
         p.stepSimulation()
-        time.sleep(SIM_TIMESTEP)
+        _sleep()
 
     # ------------------------------------------------------------------ #
     # --- Test your Inverse Kinematic function using one target pose --- #
@@ -256,7 +256,7 @@ def main(args):
                         lifeTime = 0)
     for _ in range(int(1 / SIM_TIMESTEP * 2)):
         p.stepSimulation()
-        time.sleep(SIM_TIMESTEP)
+        _sleep()
     p.removeAllUserDebugItems()
 
     # test your ik solver
@@ -278,5 +278,6 @@ def main(args):
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--visualize-pose', '-vp', action='store_true', default=False, help='whether show the poses of end effector')
+    parser.add_argument('--headless', action='store_true', default=False, help='run without the GUI (no sleeping between steps)')
     args = parser.parse_args()
     main(args)

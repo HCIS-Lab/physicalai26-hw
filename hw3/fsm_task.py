@@ -127,9 +127,9 @@ class FSMPipeline(object):
             self.diag_fk.append((tag + '_fk', q_meas, list(fk_pose),
                                  fk_err, 0.0))
         if ik_err > IK_TOL:
-            self.diag_ik.append((tag, q_meas, 'MISS', ik_err, distance))
+            self.diag_ik.append((tag + '_ik', q_meas, 'NO_CONVERGENCE', ik_err, distance))
         elif self._diag_n == 1:
-            self.diag_ik.append((tag, q_meas, 'SOLVED', ik_err, distance))
+            self.diag_ik.append((tag + '_ik', q_meas, 'SOLVED', ik_err, distance))
 
         if fk_err > FK_TOL:
             return 'FK_MISMATCH in {} (fk vs sim = {:.4f} m)'.format(state, fk_err)
@@ -274,6 +274,7 @@ def main(args):
         from diagnose import diagnose
         diagnose('Task 4 FSM', fk_records=fsm.diag_fk, ik_records=fsm.diag_ik)
     except Exception as exc:
+        import traceback; traceback.print_exc()
         print('(semantic diagnosis unavailable: {})'.format(exc))
     p.disconnect()
 

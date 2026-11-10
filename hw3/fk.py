@@ -191,6 +191,7 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
         from diagnose import diagnose
         diagnose('Task 2 FK', fk_records=diag_fail + diag_sample)
     except Exception as exc:
+        import traceback; traceback.print_exc()
         print('(semantic diagnosis unavailable: {})'.format(exc))
 
 def main(args):
@@ -233,7 +234,7 @@ def main(args):
     ]
 
     # scoring your algorithm
-    score_fk(robot, testcase_files, visualize=args.visualize_pose)
+    score_fk(robot, testcase_files, visualize=args.visualize_pose and args.gui)
 
 
 if __name__=="__main__":

@@ -40,6 +40,8 @@ def parse_report(name):
         return None
     with open(path) as f:
         txt = f.read()
+    if 'sh:conforms' not in txt:   # empty / unparsable report (e.g. Turtle syntax error)
+        return None
     results = []
     for chunk in RESULT_SPLIT.split(txt)[1:]:
         focus = re.search(r'sh:focusNode\s+([^\s;]+)', chunk)
@@ -61,10 +63,11 @@ def main():
     total = 0.0
     report = []
 
-    # ---------------- S1: grounding structure (10) ----------------
+    # ---------------- S1: grounding structure (12) ----------------
     ta = parse_report('ta-validation.ttl')
+    ta_valid = ta is not None
     if ta is None:
-        report.append('[S1] ta-validation.ttl missing ........ FAIL (+0)')
+        report.append('[S1] ta-validation.ttl missing or invalid ... FAIL (+0)')
         ta = []
     else:
         structural = [(f, m) for f, m in ta if m.startswith('STRUCTURE')]
@@ -91,6 +94,7 @@ def main():
          'no JOINT_LIMIT_VIOLATION'),
     ]
     for ok, pts, label in checks:
+        ok = ok and ta_valid   # no valid report -> no vacuous passes
         total += pts if ok else 0
         report.append('[S2] {} {} (+{})'.format(
             (label + ' ').ljust(40, '.'), 'OK ' if ok else 'FAIL',
@@ -100,7 +104,7 @@ def main():
     probe = parse_report('probe-validation.ttl')
     key_path = os.path.join(HERE, 'ta-answer-key.json')
     if probe is None or not os.path.exists(key_path):
-        report.append('[S3] probe-validation.ttl / answer key missing  FAIL (+0)')
+        report.append('[S3] probe-validation.ttl missing/invalid or answer key missing  FAIL (+0)')
     else:
         with open(key_path) as f:
             answer_key = json.load(f)
@@ -138,7 +142,7 @@ def main():
     print('-' * 70)
     print('  Your Task 1 Score : {:.1f} / 30.0'.format(total))
     print('=' * 70)
-    sys.exit(0 if total >= 29.9 else 1)
+    sys.exit(0)  # a partial score is a result, not a crash
 
 
 if __name__ == '__main__':

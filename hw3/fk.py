@@ -119,9 +119,10 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
             gt_pose = poses[i]
 
             if visualize :
-                # 視覺增強: 把手臂擺到這筆測資的關節角, 讓紅/綠座標軸出現在手掌上。
-                # reset + 馬達目標 + 少量 step 才會讓 GUI 同步畫面 (同 Task 2 的模式);
-                # 這只影響顯示 — your_fk 的計算與評分完全不經過 pybullet。
+                # Visual aid: put the arm at this test case's joint angles so the
+                # red/green coordinate axes appear on the hand. reset + motor target
+                # + a few steps are needed for the GUI to refresh (same pattern as Task 3);
+                # this only affects the display - your_fk and the scoring never use pybullet.
                 joint_ids = list(robot._joint_name_to_ids.values())
                 for jid, qi in zip(joint_ids, joint_poses[i]):
                     p.resetJointState(robot.robot_id, jid, qi)

@@ -11,10 +11,10 @@
 #     shacl validate --shapes shapes.ttl --data output/data.ttl
 #     -> output/validation.ttl   (SHACL validation report, Turtle)
 #
-# Grading (1) uses the full TA shapes in ta-shapes-full.ttl to validate your
+# Grading (1) uses the TA's own full shapes (not distributed) to validate your
 # data.ttl, and (2) uses your shapes.ttl against the TA's mixed 30-record
 # execution dataset (ta-faulty-execution.ttl, including boundary values).
-# Each record's flags must exactly match ta-answer-key.json: no false positives
+# Each record's flags must exactly match the TA's answer key (not distributed): no false positives
 # and no false negatives. The scorer identifies flags by sh:message prefix;
 # use the required prefixes below. Thresholds must use sh:maxInclusive because
 # the dataset includes values exactly equal to a threshold.
@@ -33,7 +33,7 @@ hw3:FKAccuracyShape a sh:NodeShape ;
 
 # ---- STUDENT TODO 1: arm out of range ---------------------------------------
 # Write a sh:NodeShape targeted at hw3:IKComputation:
-#   hw3:hasTargetDistance must be <= 0.90 (UR5 reach, in metres).
+#   hw3:hasTargetDistance must be <= 0.76 (the course reach limit, in metres).
 #   On violation, sh:message must begin with "ARM_OUT_OF_RANGE:".
 # Follow the worked example above; change the path, threshold, and message.
 

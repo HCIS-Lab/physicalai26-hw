@@ -8,7 +8,7 @@ import pybullet_data
 
 # for geometry information
 from hw3_utils.joint_limits import UR5_JOINT_LIMITS
-from hw3_utils.bullet_utils import draw_coordinate, get_matrix_from_pose, get_pose_from_matrix, pose_7d_to_6d, pose_6d_to_7d
+from hw3_utils.bullet_utils import pose_error_7d, draw_coordinate, get_matrix_from_pose, get_pose_from_matrix, pose_7d_to_6d, pose_6d_to_7d
 
 # you may use your forward kinematic algorithm to compute 
 from fk import your_fk, get_ur5_DH_params
@@ -22,11 +22,22 @@ def _sleep():
 TASK3_SCORE_MAX = 40
 IK_ERROR_THRESH = 0.02
 
+def _ik_status(your_pose, gt_pose, base_pos, ik_error):
+    # same classification as semantic/common.classify_ik_result (position based),
+    # forced to NO_CONVERGENCE when the graded 7D error is above the threshold
+    import sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'semantic'))
+    from common import classify_ik_result
+    status, _ = classify_ik_result(np.asarray(your_pose)[:3], np.asarray(gt_pose)[:3], base_pos)
+    if status == 'SOLVED' and ik_error > IK_ERROR_THRESH:
+        status = 'NO_CONVERGENCE'
+    return status
+
 def cross(a : np.ndarray, b : np.ndarray) -> np.ndarray :
     return np.cross(a, b)
 
 # this is the pybullet version
-def pybullet_ik(robot_id, new_pose : list or tuple or np.ndarray, 
+def pybullet_ik(robot_id, new_pose : "list | tuple | np.ndarray", 
                 max_iters : int=1000, stop_thresh : float=.001, base_pos=None):
     
     new_pos, new_rot = new_pose[:3], new_pose[3:]
@@ -38,7 +49,7 @@ def pybullet_ik(robot_id, new_pose : list or tuple or np.ndarray,
         targetOrientation=new_rot,
         lowerLimits=UR5_JOINT_LIMITS[:, 0].tolist(),
         upperLimits=UR5_JOINT_LIMITS[:, 1].tolist(),
-        jointRanges=[np.pi, 2.3562, 34, 34, 34, 34],  # * 6,
+        jointRanges=(UR5_JOINT_LIMITS[:, 1] - UR5_JOINT_LIMITS[:, 0]).tolist(),
         restPoses=np.float32(np.array([-1, -0.5, 0.5, -0.5, -0.5, 0]) * np.pi).tolist(),
         maxNumIterations=max_iters,
         residualThreshold=stop_thresh)
@@ -48,7 +59,7 @@ def pybullet_ik(robot_id, new_pose : list or tuple or np.ndarray,
     return joint_poses
 
 
-def your_ik(robot_id, new_pose : list or tuple or np.ndarray, 
+def your_ik(robot_id, new_pose : "list | tuple | np.ndarray", 
                 base_pos, max_iters : int=1000, stop_thresh : float=.001):
 
 
@@ -63,9 +74,9 @@ def your_ik(robot_id, new_pose : list or tuple or np.ndarray,
         
     # -------------------------------------------------------------------------------- #
     # --- TODO: Read the task description                                          --- #
-    # --- Task 2 : Compute Inverse-Kinematic Solver of the robot by yourself.      --- #
-    # ---          Try to implement `your_ik` function WITHOUT using ANY pybullet  --- #
-    # ---          API. (40% for accuracy)                                         --- #
+    # --- Task 3 : Compute Inverse-Kinematic Solver of the robot by yourself.      --- #
+    # ---          Try to implement `your_ik` function WITHOUT using pybullet's IK/FK --- #
+    # ---          (calculateInverseKinematics etc.). (40% for accuracy)                                         --- #
     # --- Note : please modify the code in `your_ik` function.                     --- #
     # -------------------------------------------------------------------------------- #
     
@@ -120,12 +131,17 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
 
         for i in range(cases_num):
 
+            # reset the arm to this case's start configuration so every case is
+            # independent (a miss in one case must not affect the next ones)
+            for jid, qi in zip(robot._joint_name_to_ids.values(), ik_dict['current_joint_poses'][i]):
+                p.resetJointState(robot.robot_id, jid, qi)
+
             # TODO: check your default arguments of `max_iters` and `stop_thresh` are your best parameters.
             #       We will only pass default arguments of your `max_iters` and `stop_thresh`.
             your_joint_poses = your_ik(robot.robot_id, poses[i], base_pos=robot._base_position) 
             
 
-            # You can use `pybullet_ik` to see the correct version 
+            # `pybullet_ik` is a simulator-side reference solver you may compare against 
             # your_joint_poses = pybullet_ik(robot.robot_id, poses[i]) 
 
             gt_pose = poses[i]        
@@ -152,7 +168,8 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
                 draw_coordinate(your_pose, size=0.01, color=color_yours)
                 draw_coordinate(gt_pose, size=0.01, color=color_gt)
 
-            ik_error = np.linalg.norm(your_pose - np.asarray(gt_pose), ord=2)
+            ik_error = pose_error_7d(your_pose, gt_pose)
+            ik_pos_error = float(np.linalg.norm(np.asarray(your_pose)[:3] - np.asarray(gt_pose)[:3]))
             ik_errors.append(ik_error)
             if ik_error > IK_ERROR_THRESH:
                 ik_score[file_id] -= penalty
@@ -164,8 +181,8 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
             diag_rec = ('diag_{}_{:03d}'.format(
                             test_case_name.replace('ik_test_case_', '').replace('.json', ''), i),
                         list(your_joint_poses)[:6],
-                        'NO_CONVERGENCE' if ik_error > IK_ERROR_THRESH else 'SOLVED',
-                        float(ik_error),
+                        _ik_status(your_pose, gt_pose, robot._base_position, ik_error),
+                        ik_pos_error,
                         float(np.linalg.norm(np.asarray(gt_pose[:3]) - shoulder)))
             if ik_error > IK_ERROR_THRESH:
                 diag_fail.append(diag_rec)

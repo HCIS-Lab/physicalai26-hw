@@ -168,27 +168,28 @@ def main():
     with open(os.path.join(HW_ROOT, 'test_case',
                            'fk_test_case_easy.json')) as f:
         gt = json.load(f)
-    base_pos = [-0.2, 0.13, 0.6]  # ur5Env default base position
+    robot, base_pos = common.connect_sim()
     for i, q in enumerate(gt['joint_poses'][:NUM_FK_CASES]):
         if args.own:
             pose, _jac = your_fk(dh_params, q, base_pos)
-            pose_error = round(float(np.linalg.norm(
-                np.asarray(pose) - np.asarray(gt['poses'][i]))), 6)
             jacobian_error = round(float(np.linalg.norm(
                 np.asarray(_jac) - np.asarray(gt['jacobian'][i]))), 6)
         else:
-            # Task 1 default: TA reference execution — the course ground
-            # truth IS the reference FK, so the errors are zero.
-            pose = list(gt['poses'][i])
-            pose_error = 0.0
-            jacobian_error = 0.0
-        print('[FK] case {} -> pose_err={:.6f} jac_err={:.6f}'.format(
+            # Default: an actual simulator execution — the arm is placed at q
+            # and the end-effector pose is READ from the simulator (it is not
+            # copied from the answer key). The Jacobian is not computed here:
+            # -1.0 means "not computed" (see hw3-ontology.ttl).
+            pose = list(common.sim_eef_pose(robot, q))
+            jacobian_error = -1.0
+        # FK error is a POSITION error in metres (same meaning as hw3:hasResidual).
+        pose_error = round(float(np.linalg.norm(
+            np.asarray(pose)[:3] - np.asarray(gt['poses'][i])[:3])), 6)
+        print('[FK] case {} -> pose_err={:.6f} m jac_err={:.6f}'.format(
             i, pose_error, jacobian_error))
         lines += fk_computation_to_triples(i, q, list(pose),
                                            pose_error, jacobian_error)
 
     # ---- IK execution process (3 shared targets) ----
-    robot, base_pos = common.connect_sim()
     home_quat = np.asarray(robot.get_eef_pose())[3:]
     shoulder = np.asarray(base_pos) + [0.0, 0.0, SHOULDER_HEIGHT]
     for target in SHARED_TARGETS:
@@ -197,8 +198,8 @@ def main():
         if args.own:
             joints = list(your_ik(robot.robot_id, target_pose_7d,
                                   base_pos=base_pos))
-            eef_pos, _ = your_fk(dh_params, joints, base_pos)
-            eef_pos = eef_pos[:3]
+            # judge the solution with the SIMULATOR pose, not with your own FK
+            eef_pos = common.sim_eef_pose(robot, joints)[:3]
         else:
             # Task 1 default: TA reference IK (simulator solver),
             # clipped to the course joint limits exactly like your_ik.

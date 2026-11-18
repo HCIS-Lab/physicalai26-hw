@@ -23,12 +23,9 @@ HW3_NS = 'http://taica.course/hw3/ontology#'
 def stu_ns(group_id):
     """Per-group data namespace: http://taica.course/hw3/data/<group-id>#
 
-    Reusability across submissions: every group publishes its instances
-    under its OWN namespace while sharing the hw3: vocabulary and the
-    shared target URIs. Any number of group graphs can therefore be loaded
-    into one triple store without URI collisions, and one SPARQL query can
-    compare every group's results (see q3, which generalizes from 2 robots
-    to N robots automatically).
+    Every group writes its instances under its OWN namespace while sharing
+    the hw3: vocabulary and the shared target URIs, so graphs from different
+    groups never collide if someone later merges them (no store is used here).
     """
     safe = ''.join(c if (c.isalnum() or c in '-_') else '-' for c in group_id)
     return 'http://taica.course/hw3/data/{}#'.format(safe)
@@ -36,19 +33,16 @@ def stu_ns(group_id):
 OUTPUT_DIR = os.path.join(HERE, 'output')
 
 SIM_TIMESTEP = 1.0 / 240.0
-UR5_MAX_REACH = 0.90          # UR5 workspace radius (m); beyond => OUT_OF_REACH
+UR5_MAX_REACH = 0.76          # course reach limit (m), measured: IK with the fixed home orientation and course joint limits stops converging beyond ~0.75 m (official UR5 reach is 0.85 m); beyond => OUT_OF_REACH
 SHOULDER_HEIGHT = 0.0892      # DH d1: shoulder height (m)
 IK_SOLVED_THRESH = 0.02       # residual threshold for SOLVED (m)
-FK_POSE_ERROR_THRESH = 0.005  # Task 2 (FK) pose error threshold (course value)
-FK_JACOBIAN_ERROR_THRESH = 0.05  # Task 2 (FK) Jacobian error threshold (course value)
 
 # Joint limits: shared with ik.py via hw3_utils/joint_limits.py
 from hw3_utils.joint_limits import UR5_JOINT_LIMITS
 JOINT_LIMITS = UR5_JOINT_LIMITS.tolist()
 
-# Shared targets (exactly the same coordinates as hw3:target_* in the
-# ontology; the URIs must also be the same set, otherwise SPARQL cannot
-# join across graphs)
+# Shared targets (fixed experiment settings; ground_execution.py writes them
+# as hw3:target_* nodes, so every group uses the same URIs and coordinates)
 SHARED_TARGETS = [
     {'uri': 'target_near', 'position': [0.35, 0.28, 0.95]},
     {'uri': 'target_mid',  'position': [0.90, 0.13, 0.80]},
@@ -126,8 +120,7 @@ def write_graph(filename, lines, group_id, script_name):
 
     The stu: prefix is bound to THIS group's namespace, so the same
     triple-writing code (stu:my_ur5, stu:ik_target_near, ...) yields
-    group-unique URIs — submissions from different groups can be merged
-    into one store and cross-queried.
+    group-unique URIs.
     """
     header = [
         '@prefix hw3:  <{}> .'.format(HW3_NS),

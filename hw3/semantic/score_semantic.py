@@ -51,6 +51,22 @@ def parse_report(name):
     return results
 
 
+def missing_grounding():
+    """Existence checks on output/data.ttl: 1 cora:Robot, 6 RevoluteJoints, 3 IKComputations."""
+    path = os.path.join(OUTPUT, 'data.ttl')
+    try:
+        with open(path) as f:
+            txt = f.read()
+    except OSError:
+        return ['data.ttl missing']
+    checks = [
+        ('exactly one cora:Robot', len(re.findall(r'\ba\s+cora:Robot\b', txt)) == 1),
+        ('6 soma:RevoluteJoint', len(re.findall(r'\ba\s+soma:RevoluteJoint\b', txt)) == 6),
+        ('3 hw3:IKComputation', len(re.findall(r'\ba\s+hw3:IKComputation\b', txt)) == 3),
+    ]
+    return ['missing ' + name for name, ok in checks if not ok]
+
+
 def flagged(results, focus_key, msg_prefix=None):
     for focus, msg in results:
         if focus_key in focus and (msg_prefix is None
@@ -59,7 +75,29 @@ def flagged(results, focus_key, msg_prefix=None):
     return False
 
 
+def student_summary():
+    """Student package (no TA shapes / answer key): show what YOUR shapes found."""
+    print('=' * 70)
+    print('  Task 1 : your own validation results (final score = TA grader)')
+    print('=' * 70)
+    missing = missing_grounding()
+    print('  grounding nodes: {}'.format('OK' if not missing else ', '.join(missing)))
+    for name in ('validation.ttl', 'probe-validation.ttl'):
+        res = parse_report(name)
+        if res is None:
+            print('  {}: missing or invalid report'.format(name))
+            continue
+        print('  {}: {} result(s)'.format(name, len(res)))
+        for focus, msg in res[:30]:
+            print('     - {} : {}'.format(focus, msg[:70]))
+    print('=' * 70)
+
+
 def main():
+    if not os.path.exists(os.path.join(HERE, 'ta-shapes-full.ttl')) \
+            or not os.path.exists(os.path.join(HERE, 'ta-answer-key.json')):
+        student_summary()
+        sys.exit(0)
     total = 0.0
     report = []
 
@@ -72,6 +110,11 @@ def main():
     else:
         structural = [(f, m) for f, m in ta if m.startswith('STRUCTURE')]
         s1 = max(0.0, 12.0 - 2.0 * len(structural))
+        # The shapes only check nodes that exist, so also require that the
+        # expected grounding nodes exist (otherwise `return []` scores full S1).
+        missing = missing_grounding()
+        s1 = max(0.0, s1 - 4.0 * len(missing))
+        structural = structural + [('(data.ttl)', 'STRUCTURE: ' + m) for m in missing]
         total += s1
         if structural:
             report.append('[S1] grounding structure .............. PARTIAL (+{:g}) '
@@ -122,7 +165,9 @@ def main():
         clean = [c for c in answer_key if not answer_key[c]]
         hit_f = sum(1 for c in faulty if c in matched)
         hit_c = sum(1 for c in clean if c in matched)
-        s3 = round(8.0 * hit_f / len(faulty) + 2.0 * hit_c / len(clean), 1)
+        # every probe record weighs the same: a wrong boundary case or a false
+        # positive costs as much as a missed fault
+        s3 = round(10.0 * len(matched) / len(answer_key), 1)
         total += s3
         status = 'OK ' if not mismatched else 'PARTIAL'
         report.append('[S3] TA dataset vs answer key: faulty {}/{}, clean {}/{} '

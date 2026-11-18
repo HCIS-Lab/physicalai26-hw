@@ -13,7 +13,7 @@ def wxyz2xyzw(quat : list or np.ndarray):
     return np.asarray([quat[1], quat[2], quat[3], quat[0]])
 
 # pose format converter => (x, y, z, rx, ry, rz) to (x, y, z, quaternion in (x, y, z, w) format)
-def pose_6d_to_7d(pose : list or tuple or np.ndarray):
+def pose_6d_to_7d(pose : "list | tuple | np.ndarray"):
     assert len(pose) == 6, f'input array size should be 6d but got {len(pose)}d'
 
     pos = pose[:3]
@@ -23,7 +23,7 @@ def pose_6d_to_7d(pose : list or tuple or np.ndarray):
     return list(pos) + list(rot_quat)
 
 # pose format converter => (x, y, z, quaternion in (x, y, z, w) format) to (x, y, z, rx, ry, rz)
-def pose_7d_to_6d(pose : list or tuple or np.ndarray):
+def pose_7d_to_6d(pose : "list | tuple | np.ndarray"):
     assert len(pose) == 7, f'input array size should be 7d but got {len(pose)}d'
 
     pos = pose[:3]
@@ -33,7 +33,7 @@ def pose_7d_to_6d(pose : list or tuple or np.ndarray):
     return list(pos) + list(rot_vec)
 
 # convert 6d pose or 7d pose to 4x4 transformation matrix
-def get_matrix_from_pose(pose : list or tuple or np.ndarray) -> np.ndarray:
+def get_matrix_from_pose(pose : "list | tuple | np.ndarray") -> np.ndarray:
     assert len(pose) == 6 or len(pose) == 7, f'pose must contain 6 or 7 elements, but got {len(pose)}'
     pos_m = np.asarray(pose[:3])
     rot_m = np.identity(3)
@@ -50,7 +50,7 @@ def get_matrix_from_pose(pose : list or tuple or np.ndarray) -> np.ndarray:
     return ret_m
 
 # convert 4x4 transformation matrix to 6d pose or 7d pose 
-def get_pose_from_matrix(matrix : list or tuple or np.ndarray, 
+def get_pose_from_matrix(matrix : "list | tuple | np.ndarray", 
                         pose_size : int = 7) -> np.ndarray:
 
     mat = np.array(matrix)
@@ -69,9 +69,17 @@ def get_pose_from_matrix(matrix : list or tuple or np.ndarray,
 
     return np.array(pose)
 
+def pose_error_7d(pose_a, pose_b):
+    """L2 error between two 7d poses [x,y,z,qx,qy,qz,qw] (metres + unitless
+    quaternion). q and -q are the same rotation, so the closer sign is used."""
+    a = np.asarray(pose_a, dtype=float); b = np.asarray(pose_b, dtype=float)
+    dq = min(np.linalg.norm(a[3:] - b[3:]), np.linalg.norm(a[3:] + b[3:]))
+    return float(np.linalg.norm(np.concatenate([a[:3] - b[:3], [dq]])))
+
+
 # get dense waypoints from start_config to end_config by interpolation
-def get_dense_waypoints(start_config : list or tuple or np.ndarray, 
-                        end_config : list or tuple or np.ndarray, 
+def get_dense_waypoints(start_config : "list | tuple | np.ndarray", 
+                        end_config : "list | tuple | np.ndarray", 
                         resolution : float=0.005):
 
     assert len(start_config) == 7 and len(end_config) == 7
@@ -109,8 +117,8 @@ def draw_coordinate(pose : np.ndarray or tuple or list,
     p.addUserDebugLine(origin, y, color[1])
     p.addUserDebugLine(origin, z, color[2])
 
-def draw_bbox(start : list or tuple or np.ndarray,
-              end : list or tuple or np.ndarray):
+def draw_bbox(start : "list | tuple | np.ndarray",
+              end : "list | tuple | np.ndarray"):
     
     assert len(start) == 3 and len(end) == 3, f'infeasible size of position, len(position) must be 3'
 

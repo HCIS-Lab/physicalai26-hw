@@ -11,7 +11,7 @@
 # record by record with ta-answer-key.json: each record's flag set must
 # match the answer EXACTLY (no false positives, no false negatives).
 # Boundary semantics: numeric thresholds are INCLUSIVE (sh:maxInclusive) —
-# values exactly at 0.90 / 0.02 / 0.005 conform; joint limits are inclusive
+# values exactly at 0.76 / 0.02 / 0.005 conform; joint limits are inclusive
 # too — an angle exactly at a limit is legal.
 # =============================================================================
 
@@ -32,7 +32,7 @@ probe:ik_case_04 a hw3:IKComputation ;
     hw3:hasResidual "0.015"^^xsd:double .
 
 probe:ik_case_05 a hw3:IKComputation ;
-    hw3:hasTargetDistance "0.9"^^xsd:double ;
+    hw3:hasTargetDistance "0.76"^^xsd:double ;
     hw3:hasResidual "0.02"^^xsd:double .
 
 probe:ik_case_06 a hw3:IKComputation ;
@@ -44,11 +44,11 @@ probe:ik_case_07 a hw3:IKComputation ;
     hw3:hasResidual "0.0002"^^xsd:double .
 
 probe:ik_case_08 a hw3:IKComputation ;
-    hw3:hasTargetDistance "0.82"^^xsd:double ;
+    hw3:hasTargetDistance "0.73"^^xsd:double ;
     hw3:hasResidual "0.011"^^xsd:double .
 
 probe:ik_case_09 a hw3:IKComputation ;
-    hw3:hasTargetDistance "0.901"^^xsd:double ;
+    hw3:hasTargetDistance "0.761"^^xsd:double ;
     hw3:hasResidual "0.004"^^xsd:double .
 
 probe:ik_case_10 a hw3:IKComputation ;
@@ -64,7 +64,7 @@ probe:ik_case_12 a hw3:IKComputation ;
     hw3:hasResidual "0.15"^^xsd:double .
 
 probe:ik_case_13 a hw3:IKComputation ;
-    hw3:hasTargetDistance "0.85"^^xsd:double ;
+    hw3:hasTargetDistance "0.74"^^xsd:double ;
     hw3:hasResidual "0.05"^^xsd:double .
 
 probe:ik_case_14 a hw3:IKComputation ;

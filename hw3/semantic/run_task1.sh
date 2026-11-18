@@ -85,8 +85,14 @@ run_shacl () {  # $1 shapes, $2 data, $3 out
         || echo "     conforms: false ($(grep -c 'sh:ValidationResult' "$3" || true) result(s))"
 }
 run_shacl shapes.ttl output/data.ttl output/validation.ttl
-run_shacl ta-shapes-full.ttl output/data.ttl output/ta-validation.ttl
 run_shacl shapes.ttl ta-faulty-execution.ttl output/probe-validation.ttl
+# The TA's full shapes / answer key are NOT part of the student package; the
+# TA grader has them. Without them only YOUR shapes are validated.
+if [ -f ta-shapes-full.ttl ]; then
+    run_shacl ta-shapes-full.ttl output/data.ttl output/ta-validation.ttl
+else
+    echo "(ta-shapes-full.ttl not distributed: TA-side checks are done by the grader)"
+fi
 
 echo
 echo "== STEP 5/5 | Scoring Task 1 =="

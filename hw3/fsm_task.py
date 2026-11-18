@@ -26,12 +26,14 @@ Run:
 
 import argparse
 import os
+import sys
 import time
 
 import numpy as np
 import pybullet as p
 import pybullet_data
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), 'semantic'))
 from fk import your_fk, get_ur5_DH_params
 from ik import your_ik
 
@@ -58,7 +60,7 @@ def sample_episode(seed):
     """Seeded block / goal positions, both well inside the UR5 workspace."""
     rng = np.random.RandomState(seed)
     while True:
-        # sampled inside the workspace the Task 1/2 test cases already cover
+        # sampled inside the workspace the Task 2/3 test cases already cover
         block = np.array([rng.uniform(0.32, 0.47), rng.uniform(0.02, 0.24)])
         goal = np.array([rng.uniform(0.32, 0.47), rng.uniform(0.02, 0.24)])
         if np.linalg.norm(block - goal) > 0.12:
@@ -95,7 +97,7 @@ class FSMPipeline(object):
 
         Long jumps may need re-solving: iterative IK is warm-started from
         the CURRENT joint state, so after the first motion a re-solve
-        refines the solution (exactly how the continuous Task 2 trajectory
+        refines the solution (exactly how the continuous Task 3 trajectory
         converges). Up to 3 solve-and-drive attempts per state.
         """
         target = list(position) + self.home_quat
@@ -124,10 +126,15 @@ class FSMPipeline(object):
         self._diag_n += 1
         tag = 'diag_{:02d}_{}'.format(self._diag_n, state.lower())
         if fk_err > FK_TOL:
+            # -1.0 = Jacobian not computed here (see hw3-ontology.ttl)
             self.diag_fk.append((tag + '_fk', q_meas, list(fk_pose),
-                                 fk_err, 0.0))
+                                 fk_err, -1.0))
         if ik_err > IK_TOL:
-            self.diag_ik.append((tag + '_ik', q_meas, 'NO_CONVERGENCE', ik_err, distance))
+            from common import classify_ik_result
+            st, _ = classify_ik_result(ee, position, self.base_pos)
+            if st == 'SOLVED':   # between 0.02 m (course) and IK_TOL
+                st = 'NO_CONVERGENCE'
+            self.diag_ik.append((tag + '_ik', q_meas, st, ik_err, distance))
         elif self._diag_n == 1:
             self.diag_ik.append((tag + '_ik', q_meas, 'SOLVED', ik_err, distance))
 
@@ -241,8 +248,8 @@ def main(args):
             globalScaling=1.6)
         p.changeVisualShape(marker, -1, rgbaColor=[0, 0.8, 0, 0.35])
         p.setCollisionFilterGroupMask(marker, -1, 0, 0)  # marker: visual only
-        self_step = int(0.5 / SIM_TIMESTEP)
-        for _ in range(self_step):
+        n_steps = int(0.5 / SIM_TIMESTEP)
+        for _ in range(n_steps):
             p.stepSimulation()
 
         ok, state, error = fsm.run_episode(block_id, block_xy, goal_xy)

@@ -63,7 +63,7 @@ hw3:hasDoF a owl:DatatypeProperty ;
 
 hw3:producedBy a owl:DatatypeProperty ;
     rdfs:range xsd:string ;
-    rdfs:comment "Provenance: identifier of the program / group that produced this piece of knowledge. This is what lets independently developed programs publish into the same store and still be told apart."@en ;
+    rdfs:comment "Provenance: identifier of the program / group that produced this piece of knowledge. This is what lets independently developed programs publish knowledge and still be told apart."@en ;
     rdfs:label "produced by"@en .
 
 hw3:jointIndex a owl:DatatypeProperty ;
@@ -99,7 +99,7 @@ hw3:hasJointUpperLimit a owl:DatatypeProperty ;
     rdfs:label "joint upper limit (radians)"@en .
 
 # =============================================================================
-# 2. Kinematic computations (evaluation of Task 1 and Task 2)
+# 2. Kinematic computations (evaluation of Task 2 and Task 3)
 #    "An FK/IK computation" has no counterpart in CORA/SOMA, so these
 #    are hw3: classes.
 # =============================================================================
@@ -206,20 +206,20 @@ hw3:hasResidual a owl:DatatypeProperty ;
 hw3:hasTargetDistance a owl:DatatypeProperty ;
     rdfs:domain hw3:IKComputation ;
     rdfs:range xsd:double ;
-    rdfs:comment "Distance from the robot's shoulder to the IK target (meters), grounded by the numeric layer. SHACL compares it against the UR5 reach (0.90 m) to detect ARM_OUT_OF_RANGE."@en ;
+    rdfs:comment "Distance from the robot's shoulder to the IK target (meters), grounded by the numeric layer. SHACL compares it against the course reach limit (0.76 m, measured for this IK setup) to detect ARM_OUT_OF_RANGE."@en ;
     rdfs:label "has target distance (meters)"@en .
 
-# --- evaluation of Task 1 (FK correctness against ground truth) ---
+# --- evaluation of Task 2 (FK correctness against ground truth) ---
 hw3:hasPoseError a owl:DatatypeProperty ;
     rdfs:domain hw3:FKComputation ;
     rdfs:range xsd:double ;
-    rdfs:comment "L2 norm between the computed 7d end-effector pose and the ground-truth pose (course threshold: 0.005)."@en ;
+    rdfs:comment "Position error (metres) between the computed end-effector position and the ground-truth position (course threshold: 0.005)."@en ;
     rdfs:label "has FK pose error"@en .
 
 hw3:hasJacobianError a owl:DatatypeProperty ;
     rdfs:domain hw3:FKComputation ;
     rdfs:range xsd:double ;
-    rdfs:comment "L2 norm between the computed 6x6 Jacobian and the ground-truth Jacobian (course threshold: 0.05). -1.0 when not computed (reference preview mode)."@en ;
+    rdfs:comment "L2 norm between the computed 6x6 Jacobian and the ground-truth Jacobian (course threshold: 0.05). -1.0 when not computed."@en ;
     rdfs:label "has Jacobian error"@en .
 
 # =============================================================================

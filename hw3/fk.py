@@ -7,7 +7,7 @@ from scipy.spatial.transform import Rotation as R
 import pybullet as p
 
 # for geometry information
-from hw3_utils.bullet_utils import draw_coordinate, get_matrix_from_pose, get_pose_from_matrix, pose_7d_to_6d, pose_6d_to_7d
+from hw3_utils.bullet_utils import pose_error_7d, draw_coordinate, get_matrix_from_pose, get_pose_from_matrix, pose_7d_to_6d, pose_6d_to_7d
 
 SIM_TIMESTEP = 1.0 / 240.0
 JACOBIAN_SCORE_MAX = 10.0
@@ -21,7 +21,7 @@ def cross(a : np.ndarray, b : np.ndarray) -> np.ndarray :
 
 def get_ur5_DH_params():
 
-    # TODO: this is the DH parameters (following classic DH convention) of the robot in this assignment,
+    # NOTE (do not edit): these are the DH parameters (following classic DH convention) of the robot in this assignment,
     # It will be a little bit different from the official spec 
     # You need to use these parameters to compute the forward kinematics and Jacobian matrix
     # details : 
@@ -39,20 +39,29 @@ def get_ur5_DH_params():
 
     return dh_params
 
-def your_fk(DH_params : dict, q : list or tuple or np.ndarray, base_pos) -> np.ndarray:
+def your_fk(DH_params : list, q, base_pos) -> tuple:
+    """Forward kinematics + Jacobian of the UR5.
+
+    DH_params : list of 6 dicts with keys 'a', 'd', 'alpha' (from get_ur5_DH_params()).
+    q         : 6 joint angles (rad).
+    base_pos  : [x, y, z] of the robot base in the world frame.
+    Returns (pose_7d, jacobian): pose_7d = [x, y, z, qx, qy, qz, qw] in the world frame,
+    jacobian = 6x6 geometric Jacobian, linear rows on top, angular rows below, expressed
+    in the world frame; the orientation 'adjustment' below is NOT applied to it.
+    """
 
     # robot initial position
     base_pose = list(base_pos) + [0, 0, 0]  
 
     assert len(DH_params) == 6 and len(q) == 6, f'Both DH_params and q should contain 6 values,\n' \
-                                                f'but get len(DH_params) = {DH_params}, len(q) = {len(q)}'
+                                                f'but get len(DH_params) = {len(DH_params)}, len(q) = {len(q)}'
 
     A = get_matrix_from_pose(base_pose) # a 4x4 matrix, type should be np.ndarray
     jacobian = np.zeros((6, 6)) # a 6x6 matrix, type should be np.ndarray
 
     # -------------------------------------------------------------------------------- #
     # --- TODO: Read the task description                                          --- #
-    # --- Task 1 : Compute Forward-Kinematic and Jacobain of the robot by yourself --- #
+    # --- Task 2 : Compute Forward-Kinematic and Jacobain of the robot by yourself --- #
     # ---          Try to implement `your_fk` function without using any pybullet  --- #
     # ---          API. (20% for accuracy)                                         --- #
     # -------------------------------------------------------------------------------- #
@@ -71,7 +80,7 @@ def your_fk(DH_params : dict, q : list or tuple or np.ndarray, base_pos) -> np.n
 
     # adjustment don't touch
     adjustment = np.asarray([[ 0, -1,  0],
-                             [ 0,  0,  0],
+                             [-1,  0,  0],
                              [ 0,  0, -1]])
     A[:3, :3] = A[:3,:3]@adjustment
     pose_7d = np.asarray(get_pose_from_matrix(A,7))
@@ -112,7 +121,9 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
 
         cases_num = len(fk_dict['joint_poses'])
 
-        penalty = (TASK2_SCORE_MAX / testcase_file_num) / (0.3 * cases_num)
+        # each sub-score (FK / Jacobian) loses its full share after errors on 30% of the cases
+        fk_penalty = (FK_SCORE_MAX / testcase_file_num) / (0.3 * cases_num)
+        jacobian_penalty = (JACOBIAN_SCORE_MAX / testcase_file_num) / (0.3 * cases_num)
 
         for i in range(cases_num):
             your_pose, your_jacobian = your_fk(dh_params, joint_poses[i], robot._base_position)
@@ -136,17 +147,18 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
                 draw_coordinate(your_pose, size=0.01, color=color_yours)
                 draw_coordinate(gt_pose, size=0.01, color=color_gt)
 
-            fk_error = np.linalg.norm(your_pose - np.asarray(gt_pose), ord=2)
+            fk_error = pose_error_7d(your_pose, gt_pose)
+            fk_pos_error = float(np.linalg.norm(np.asarray(your_pose)[:3] - np.asarray(gt_pose)[:3]))
             
             
      
             if fk_error > FK_ERROR_THRESH:
-                fk_score[file_id] -= penalty
+                fk_score[file_id] -= fk_penalty
                 fk_error_cnt[file_id] += 1
 
             jacobian_error = np.linalg.norm(your_jacobian - np.asarray(jacobians[i]), ord=2)
             if jacobian_error > JACOBIAN_ERROR_THRESH:
-                jacobian_score[file_id] -= penalty
+                jacobian_score[file_id] -= jacobian_penalty
                 jacobian_error_cnt[file_id] += 1
 
             # Task 1 bridge: keep failing cases (plus one clean sample per
@@ -155,10 +167,10 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
                 test_case_name.replace('fk_test_case_', '').replace('.json', ''), i)
             if fk_error > FK_ERROR_THRESH or jacobian_error > JACOBIAN_ERROR_THRESH:
                 diag_fail.append((diag_tag, list(joint_poses[i]),
-                                  list(your_pose), fk_error, jacobian_error))
+                                  list(your_pose), fk_pos_error, jacobian_error))
             elif i == 0:
                 diag_sample.append((diag_tag, list(joint_poses[i]),
-                                    list(your_pose), fk_error, jacobian_error))
+                                    list(your_pose), fk_pos_error, jacobian_error))
         
         fk_score[file_id] = 0.0 if fk_score[file_id] < 0.0 else fk_score[file_id]
         jacobian_score[file_id] = 0.0 if jacobian_score[file_id] < 0.0 else jacobian_score[file_id]

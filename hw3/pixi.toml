@@ -1,7 +1,7 @@
 [workspace]
 authors = ["asddzxcc1856 <t7878780@gmail.com>"]
 channels = ["conda-forge"]
-name = "hw3_template"
+name = "hw3"
 platforms = ["linux-64"]
 version = "0.1.0"
 

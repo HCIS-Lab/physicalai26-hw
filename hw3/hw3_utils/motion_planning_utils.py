@@ -1,7 +1,10 @@
 
 import numpy as np
 import pybullet as p
-import quaternion
+try:
+    import quaternion   # optional; not used by HW3 (only needed for interpolation helpers)
+except ImportError:
+    quaternion = None
 
 from scipy.spatial.transform import Rotation as R
 

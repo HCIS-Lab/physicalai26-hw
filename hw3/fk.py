@@ -14,7 +14,7 @@ JACOBIAN_SCORE_MAX = 10.0
 JACOBIAN_ERROR_THRESH = 0.05
 FK_SCORE_MAX = 10.0
 FK_ERROR_THRESH = 0.005
-TASK2_SCORE_MAX = JACOBIAN_SCORE_MAX + FK_SCORE_MAX
+TASK1_SCORE_MAX = JACOBIAN_SCORE_MAX + FK_SCORE_MAX
 
 def cross(a : np.ndarray, b : np.ndarray) -> np.ndarray :
     return np.cross(a, b)
@@ -61,7 +61,7 @@ def your_fk(DH_params : list, q, base_pos) -> tuple:
 
     # -------------------------------------------------------------------------------- #
     # --- TODO: Read the task description                                          --- #
-    # --- Task 2 : Compute Forward-Kinematic and Jacobain of the robot by yourself --- #
+    # --- Task 1 : Compute Forward-Kinematic and Jacobain of the robot by yourself --- #
     # ---          Try to implement `your_fk` function without using any pybullet  --- #
     # ---          API. (20% for accuracy)                                         --- #
     # -------------------------------------------------------------------------------- #
@@ -105,7 +105,7 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
                         textSize = 1.0,
                         lifeTime = 0)
 
-    print("============================ Task 2 : Forward Kinematic ============================\n")
+    print("============================ Task 1 : Forward Kinematic ============================\n")
     diag_fail, diag_sample = [], []
     for file_id, testcase_file in enumerate(testcase_files):
 
@@ -132,7 +132,7 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
             if visualize :
                 # Visual aid: put the arm at this test case's joint angles so the
                 # red/green coordinate axes appear on the hand. reset + motor target
-                # + a few steps are needed for the GUI to refresh (same pattern as Task 3);
+                # + a few steps are needed for the GUI to refresh (same pattern as IK (Task 2));
                 # this only affects the display - your_fk and the scoring never use pybullet.
                 joint_ids = list(robot._joint_name_to_ids.values())
                 for jid, qi in zip(joint_ids, joint_poses[i]):
@@ -161,7 +161,7 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
                 jacobian_score[file_id] -= jacobian_penalty
                 jacobian_error_cnt[file_id] += 1
 
-            # Task 1 bridge: keep failing cases (plus one clean sample per
+            # Semantic bridge: keep failing cases (plus one clean sample per
             # file) for the SHACL diagnosis printed after the score.
             diag_tag = 'diag_{}_{:03d}'.format(
                 test_case_name.replace('fk_test_case_', '').replace('.json', ''), i)
@@ -195,14 +195,14 @@ def score_fk(robot, testcase_files : str, visualize : bool=False):
         total_fk_score + total_jacobian_score, FK_SCORE_MAX + JACOBIAN_SCORE_MAX))
     print("====================================================================================")
 
-    # Task 1 bridge: validate the executions above with YOUR grounding
-    # functions + YOUR shapes.ttl (fail-soft; scores are already final).
+    # Semantic bridge: validate the executions above with the TA-provided
+    # grounding + exec-shapes.ttl (pySHACL; fail-soft; scores are already final).
     try:
         import sys
         sys.path.insert(0, os.path.join(
             os.path.dirname(os.path.abspath(__file__)), 'semantic'))
         from diagnose import diagnose
-        diagnose('Task 2 FK', fk_records=diag_fail + diag_sample)
+        diagnose('Task 1 FK', fk_records=diag_fail + diag_sample)
     except Exception as exc:
         import traceback; traceback.print_exc()
         print('(semantic diagnosis unavailable: {})'.format(exc))

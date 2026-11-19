@@ -6,7 +6,7 @@ platforms = ["linux-64"]
 version = "0.1.0"
 
 [tasks]
-task1 = "bash semantic/run_task1.sh"
+task4 = "python semantic/run_task4.py"
 fk = "python fk.py"
 ik = "python ik.py"
 fsm = "python fsm_task.py"
@@ -15,5 +15,8 @@ fsm = "python fsm_task.py"
 python = "3.7.*"
 numpy = ">=1.21.6,<2"
 scipy = ">=1.7.3,<2"
-openjdk = "11.*"
 pybullet = ">=3.21,<4"
+
+[pypi-dependencies]
+rdflib = ">=6.3,<7"
+pyshacl = ">=0.24,<0.26"

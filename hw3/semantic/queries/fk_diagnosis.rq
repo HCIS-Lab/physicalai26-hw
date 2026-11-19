@@ -1,0 +1,19 @@
+PREFIX hw3: <http://taica.course/hw3/ontology#>
+PREFIX sh:  <http://www.w3.org/ns/shacl#>
+# ---- STUDENT TODO 6 (FK): WHY is the TA's step wrong? ---------------------------
+# Take the steps flagged "MATMUL_INCONSISTENT" (your TODO 2 shape). Hypothesis:
+# the TA program multiplied the operands in the WRONG ORDER at that step, i.e.
+#     A_k = T_k @ A_(k-1)      instead of      A_k = A_(k-1) @ T_k
+# Return one row per flagged step where this hypothesis holds
+# (all three translation entries of A_k equal those of T_k @ A_(k-1), tolerance 0.001):
+#     ?caseIndex  ?stepIndex  ?cause        with ?cause = "OPERAND_ORDER_SWAPPED"
+# Hints: translation of X @ Y: row i = X_i0*Y_03 + X_i1*Y_13 + X_i2*Y_23 + X_i3 (X, Y are the
+# 3x4 affine parts); use BIND to compute the expected values and FILTER to compare.
+# In the report you must explain, in words, which line of the TA's program is wrong.
+
+SELECT ?caseIndex ?stepIndex ?cause
+WHERE {
+    # ------------------------- your query ------------------------------------
+
+    # -------------------------------------------------------------------------
+}

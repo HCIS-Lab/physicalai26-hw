@@ -19,7 +19,7 @@ HEADLESS = False
 def _sleep():
     if not HEADLESS:
         time.sleep(SIM_TIMESTEP)
-TASK3_SCORE_MAX = 40
+TASK2_SCORE_MAX = 40
 IK_ERROR_THRESH = 0.02
 
 def _ik_status(your_pose, gt_pose, base_pos, ik_error):
@@ -74,7 +74,7 @@ def your_ik(robot_id, new_pose : "list | tuple | np.ndarray",
         
     # -------------------------------------------------------------------------------- #
     # --- TODO: Read the task description                                          --- #
-    # --- Task 3 : Compute Inverse-Kinematic Solver of the robot by yourself.      --- #
+    # --- Task 2 : Compute Inverse-Kinematic Solver of the robot by yourself.      --- #
     # ---          Try to implement `your_ik` function WITHOUT using pybullet's IK/FK --- #
     # ---          (calculateInverseKinematics etc.). (40% for accuracy)                                         --- #
     # --- Note : please modify the code in `your_ik` function.                     --- #
@@ -103,7 +103,7 @@ def your_ik(robot_id, new_pose : "list | tuple | np.ndarray",
 def score_ik(robot, testcase_files : str, visualize : bool=False):
 
     testcase_file_num = len(testcase_files)
-    ik_score = [TASK3_SCORE_MAX / testcase_file_num for _ in range(testcase_file_num)]
+    ik_score = [TASK2_SCORE_MAX / testcase_file_num for _ in range(testcase_file_num)]
     ik_error_cnt = [0 for _ in range(testcase_file_num)]
 
 
@@ -113,7 +113,7 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
                         textSize = 1.0,
                         lifeTime = 0)
 
-    print("============================ Task 3 : Inverse Kinematic ============================\n")
+    print("============================ Task 2 : Inverse Kinematic ============================\n")
     diag_fail, diag_sample = [], []
     for file_id, testcase_file in enumerate(testcase_files):
 
@@ -126,7 +126,7 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
         poses = ik_dict['next_poses']
         cases_num = len(ik_dict['current_joint_poses'])
         
-        penalty = (TASK3_SCORE_MAX / testcase_file_num) / (0.3 * cases_num)
+        penalty = (TASK2_SCORE_MAX / testcase_file_num) / (0.3 * cases_num)
         ik_errors = []
 
         for i in range(cases_num):
@@ -175,7 +175,7 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
                 ik_score[file_id] -= penalty
                 ik_error_cnt[file_id] += 1
 
-            # Task 1 bridge: keep failing cases (plus one clean sample per
+            # Semantic bridge: keep failing cases (plus one clean sample per
             # file) for the SHACL diagnosis printed after the score.
             shoulder = np.asarray(robot._base_position) + [0.0, 0.0, 0.0892]
             diag_rec = ('diag_{}_{:03d}'.format(
@@ -196,7 +196,7 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
                     "- Mean Error : {:0.06f}\n".format(np.mean(ik_errors)) + \
                     "- Error Count : {:3d} / {:3d}\n".format(ik_error_cnt[file_id], cases_num) + \
                     "- Your Score Of Inverse Kinematic : {:00.03f} / {:00.03f}\n".format(
-                            ik_score[file_id], TASK3_SCORE_MAX / testcase_file_num)
+                            ik_score[file_id], TASK2_SCORE_MAX / testcase_file_num)
         
         print(score_msg)
     p.removeAllUserDebugItems()
@@ -206,17 +206,17 @@ def score_ik(robot, testcase_files : str, visualize : bool=False):
         total_ik_score += ik_score[file_id]
     
     print("====================================================================================")
-    print("- Your Total Score : {:00.03f} / {:00.03f}".format(total_ik_score , TASK3_SCORE_MAX))
+    print("- Your Total Score : {:00.03f} / {:00.03f}".format(total_ik_score , TASK2_SCORE_MAX))
     print("====================================================================================")
 
-    # Task 1 bridge: validate the executions above with YOUR grounding
-    # functions + YOUR shapes.ttl (fail-soft; scores are already final).
+    # Semantic bridge: validate the executions above with the TA-provided
+    # grounding + exec-shapes.ttl (pySHACL; fail-soft; scores are already final).
     try:
         import sys
         sys.path.insert(0, os.path.join(
             os.path.dirname(os.path.abspath(__file__)), 'semantic'))
         from diagnose import diagnose
-        diagnose('Task 3 IK', ik_records=diag_fail + diag_sample)
+        diagnose('Task 2 IK', ik_records=diag_fail + diag_sample)
     except Exception as exc:
         import traceback; traceback.print_exc()
         print('(semantic diagnosis unavailable: {})'.format(exc))

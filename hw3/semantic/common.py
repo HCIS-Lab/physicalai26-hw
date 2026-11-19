@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Shared constants and helpers for the Task 1 grounding scripts (TA-provided).
+"""Shared constants and helpers for the Task 4 semantic scripts (TA-provided).
 
-Shared by ground_execution.py and diagnose.py. All records speak the vocabulary
-<http://taica.course/hw3/ontology#>; there is no triple store, each run writes
-its own Turtle file under semantic/output/.
+Shared by ground_execution.py, diagnose.py and run_task4.py. All records speak the vocabulary
+<http://taica.course/hw3/ontology#>; there is no triple store (pure Python: rdflib +
+pySHACL), each run writes its own Turtle file under semantic/output/.
 """
 
 import argparse
@@ -56,11 +56,10 @@ def make_arg_parser(description):
     parser = argparse.ArgumentParser(description=description)
     parser.add_argument('--group', default='student-group-00',
                         help='provenance id written to hw3:producedBy')
-    parser.add_argument('--own', action='store_true',
-                        help='use YOUR your_fk/your_ik to generate the '
-                             'execution data (rerun after Tasks 2-3); the '
-                             'default uses the TA reference solvers so '
-                             'Task 1 works before any implementation')
+    parser.add_argument('--reference', action='store_true',
+                        help='debug only: ground the TA reference execution '
+                             '(simulator pose / reference IK) instead of YOUR '
+                             'your_fk / your_ik')
     return parser
 
 
@@ -200,3 +199,14 @@ def joint_config_to_ttl(node, q, joint_node_fmt='stu:my_ur5_joint{}'):
         ]
     lines.append('')
     return lines
+
+
+def matrix_to_ttl(node, matrix):
+    """Serialize the affine part of a 4x4 homogeneous transform as an
+    hw3:HomogeneousTransform node with 12 xsd:double entries
+    hw3:m00 .. hw3:m23  (row i, column j; the last row is always 0 0 0 1)."""
+    m = np.asarray(matrix, dtype=float)
+    entries = ['    hw3:m{}{} {}'.format(i, j, _double(m[i, j]))
+               for i in range(3) for j in range(4)]
+    return ['{} a hw3:HomogeneousTransform ;'.format(node),
+            ' ;\n'.join(entries) + ' .', '']

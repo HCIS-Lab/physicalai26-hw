@@ -1,28 +1,27 @@
 # -*- coding: utf-8 -*-
-"""Task 1 / REUSE — Ground an FK/IK execution process into semantic data.
+"""Grounding: turn the FK / IK execution process into semantic data (TA-provided).
 
-This task comes FIRST: by default the execution data is produced by the TA
-reference solvers (ground-truth FK poses + the simulator IK), so no student
-FK/IK implementation is needed. After finishing Tasks 2-3 you can re-run
-with --own to ground YOUR solvers' execution instead. Move that execution
-data into a semantic representation. Reuse standard ontologies (IEEE 1872 CORA robots, SOMA
-joints/joint-states/poses, IEEE 1872 POS positions, and QUDT units; local
-stubs are in ontology/hw3-ontology.ttl), and serialize numeric results as
-structured RDF in semantic/output/data.ttl.
+This file is COMPLETE — there is nothing to implement here. It runs YOUR
+your_fk / your_ik (Task 1 and Task 2) on a few cases and writes what happened
+as a knowledge graph in semantic/output/Student.ttl:
 
-SHACL validation (shapes.ttl) reads this data.ttl directly and discovers
-execution issues from the numeric values (ARM_OUT_OF_RANGE / NO_CONVERGENCE).
+  * the robot specification (cora:Robot, 6 soma:RevoluteJoint with D-H values)
+  * 3 FK computations; every FK computation lists its 6 multiplication steps
+    (hw3:FKStep: local transform T_k and cumulative transform A_k = A_(k-1) @ T_k)
+  * 3 IK computations (status, residual, target distance, iteration budget, joint states)
 
-STUDENT TODO in this file:
-    robot_spec_to_triples()      — grounds the robot specification
-    ik_computation_to_triples()  — grounds an IK execution result
-(fk_computation_to_triples() is fully implemented as the worked example.)
+Task 4 then compares this Student.ttl with the TA's execution (TA.ttl).
 
-Run (inside the pixi environment, e.g. `pixi run task1`):
-    python semantic/ground_execution.py --group <your group id>
-    python semantic/ground_execution.py --group ... --own   # after Tasks 2-3: ground YOUR FK/IK
+Vocabulary: IEEE 1872 CORA (robots), SOMA (joints / joint states / poses),
+IEEE 1872 POS (positions), QUDT (units); local stubs are in
+ontology/hw3-ontology.ttl.
+
+Run (inside the pixi environment):
+    pixi run task4                                   # grounding + full Task 4 scoring
+    python semantic/ground_execution.py --group <id> # grounding only
 """
 
+import inspect
 import json
 import os
 
@@ -31,118 +30,142 @@ import numpy as np
 import common
 from common import HOME_JOINTS, HW_ROOT, JOINT_LIMITS, SHARED_TARGETS, \
     SHOULDER_HEIGHT
+from fk_trace import trace_fk
 
 from fk import your_fk, get_ur5_DH_params  # noqa: E402
 from ik import your_ik, pybullet_ik  # noqa: E402
 
-OUTPUT_FILE = 'data.ttl'
+OUTPUT_FILE = 'Student.ttl'
 NUM_FK_CASES = 3  # number of FK test cases to evaluate and ground
 
 GROUP_ID = 'student-group-00'
 
 
 # ---------------------------------------------------------------------------
-# Worked example (already implemented): one FK computation -> triples
+# One FK computation (+ its multiplication steps) -> triples
 # ---------------------------------------------------------------------------
 def fk_computation_to_triples(case_index, joint_config, eef_pose_7d,
-                              pose_error, jacobian_error):
-    """(Example, complete) Ground one FK execution: the input joint
-    configuration, the computed EE pose, and the errors vs ground truth.
+                              pose_error, jacobian_error, steps=None):
+    """Ground one FK execution: the input joint configuration, the computed
+    EE pose, the errors vs ground truth and (optionally) the multiplication
+    steps of the chain.
 
-    Produces (STRUCTURED representation — no JSON-string literals):
         stu:fk_case_0 a hw3:FKComputation ;
+            hw3:caseIndex 0 ;                      # only for integer case ids
             hw3:producedBy "<group id>" ;
             hw3:computedForRobot stu:my_ur5 ;
-            hw3:hasInputJointConfiguration stu:fk_case_0_q ;   # object node
-            hw3:hasEndEffectorPose stu:fk_case_0_ee ;          # object node
-            hw3:hasPoseError "0.00062"^^xsd:double ;
-            hw3:hasJacobianError "0.00031"^^xsd:double .
-        (+ the structured JointConfiguration / 6DPose nodes, built with
-         common.joint_config_to_ttl / common.pose_to_ttl)
+            hw3:hasInputJointConfiguration stu:fk_case_0_q ;
+            hw3:hasEndEffectorPose stu:fk_case_0_ee ;
+            hw3:hasPoseError "0.00062"^^xsd:double ;     # position error (m)
+            hw3:hasJacobianError "0.00031"^^xsd:double ; # -1.0 = not computed
+            hw3:hasStep stu:fk_case_0_step0 , ... , stu:fk_case_0_step6 .
+        stu:fk_case_0_step3 a hw3:FKStep ;
+            hw3:stepIndex 3 ;
+            hw3:isStepOfComputation stu:fk_case_0 ;
+            hw3:hasLocalTransform stu:fk_case_0_step3_T ;       # T_3
+            hw3:hasCumulativeTransform stu:fk_case_0_step3_A .  # A_3 = A_2 @ T_3
+        (T / A are hw3:HomogeneousTransform nodes with entries hw3:m00 .. hw3:m23)
 
-    Conventions your own functions must follow as well:
-      1. Instances live in the stu: namespace; classes/properties in hw3:
-      2. Numeric values are typed literals on STRUCTURED nodes — never
-         JSON-string literals; units are QUDT IRIs (unit:M / unit:RAD)
-      3. Every instance carries hw3:producedBy for provenance
+    Step 0 is the base: its cumulative transform is the base pose.
     """
     node = 'stu:fk_case_{}'.format(case_index)
-    lines = [
-        '{} a hw3:FKComputation ;'.format(node),
+    lines = ['{} a hw3:FKComputation ;'.format(node)]
+    if isinstance(case_index, (int, np.integer)):
+        lines.append('    hw3:caseIndex {} ;'.format(int(case_index)))
+    lines += [
         '    hw3:producedBy "{}" ;'.format(GROUP_ID),
         '    hw3:computedForRobot stu:my_ur5 ;',
         '    hw3:hasInputJointConfiguration {}_q ;'.format(node),
         '    hw3:hasEndEffectorPose {}_ee ;'.format(node),
         '    hw3:hasPoseError "{}"^^xsd:double ;'.format(pose_error),
-        '    hw3:hasJacobianError "{}"^^xsd:double .'.format(jacobian_error),
+    ]
+    if steps:
+        lines.append('    hw3:hasJacobianError "{}"^^xsd:double ;'.format(
+            jacobian_error))
+        lines.append('    hw3:hasStep {} .'.format(' , '.join(
+            '{}_step{}'.format(node, s['index']) for s in steps)))
+    else:
+        lines.append('    hw3:hasJacobianError "{}"^^xsd:double .'.format(
+            jacobian_error))
+    lines.append('')
+    lines += common.joint_config_to_ttl('{}_q'.format(node), joint_config)
+    lines += common.pose_to_ttl('{}_ee'.format(node), eef_pose_7d)
+    for s in steps or []:
+        step = '{}_step{}'.format(node, s['index'])
+        lines += [
+            '{} a hw3:FKStep ;'.format(step),
+            '    hw3:stepIndex {} ;'.format(s['index']),
+            '    hw3:isStepOfComputation {} ;'.format(node),
+            '    hw3:hasLocalTransform {}_T ;'.format(step),
+            '    hw3:hasCumulativeTransform {}_A .'.format(step),
+            '',
+        ]
+        lines += common.matrix_to_ttl('{}_T'.format(step), s['local'])
+        lines += common.matrix_to_ttl('{}_A'.format(step), s['cumulative'])
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# Robot specification -> triples
+# ---------------------------------------------------------------------------
+def robot_spec_to_triples(dh_params, joint_limits):
+    """stu:my_ur5 a cora:Robot (6 DoF) and stu:my_ur5_joint1..6, each a
+    soma:RevoluteJoint with its D-H parameters and joint limits."""
+    joints = ' , '.join('stu:my_ur5_joint{}'.format(i + 1) for i in range(6))
+    lines = [
+        'stu:my_ur5 a cora:Robot ;',
+        '    hw3:producedBy "{}" ;'.format(GROUP_ID),
+        '    hw3:hasDoF 6 ;',
+        '    hw3:hasJoint {} .'.format(joints),
+        '',
+    ]
+    for i, (dh, lim) in enumerate(zip(dh_params, joint_limits)):
+        lines += [
+            'stu:my_ur5_joint{} a soma:RevoluteJoint ;'.format(i + 1),
+            '    hw3:jointIndex {} ;'.format(i + 1),
+            '    hw3:dh_a "{}"^^xsd:double ;'.format(round(float(dh['a']), 6)),
+            '    hw3:dh_d "{}"^^xsd:double ;'.format(round(float(dh['d']), 6)),
+            '    hw3:dh_alpha "{}"^^xsd:double ;'.format(
+                round(float(dh['alpha']), 6)),
+            '    hw3:hasJointLowerLimit "{}"^^xsd:double ;'.format(
+                round(float(lim[0]), 6)),
+            '    hw3:hasJointUpperLimit "{}"^^xsd:double .'.format(
+                round(float(lim[1]), 6)),
+            '',
+        ]
+    return lines
+
+
+# ---------------------------------------------------------------------------
+# One IK computation -> triples
+# ---------------------------------------------------------------------------
+def ik_computation_to_triples(target_uri, joint_config, ik_status, residual,
+                              target_distance, max_iterations=None):
+    """stu:ik_<target> a hw3:IKComputation with status, residual (m), target
+    distance (m), the resulting joint configuration and (optionally) the
+    iteration budget hw3:hasMaxIterations the solver ran with."""
+    node = 'stu:ik_{}'.format(target_uri)
+    lines = [
+        '{} a hw3:IKComputation ;'.format(node),
+        '    hw3:producedBy "{}" ;'.format(GROUP_ID),
+        '    hw3:computedForRobot stu:my_ur5 ;',
+        '    hw3:solvesForTarget hw3:{} ;'.format(target_uri),
+        '    hw3:hasIKStatus "{}" ;'.format(ik_status),
+        '    hw3:hasResidual "{}"^^xsd:double ;'.format(residual),
+        '    hw3:hasTargetDistance "{}"^^xsd:double ;'.format(target_distance),
+    ]
+    if max_iterations is not None:
+        lines.append('    hw3:hasMaxIterations {} ;'.format(int(max_iterations)))
+    lines += [
+        '    hw3:hasJointConfiguration {}_q .'.format(node),
         '',
     ]
     lines += common.joint_config_to_ttl('{}_q'.format(node), joint_config)
-    lines += common.pose_to_ttl('{}_ee'.format(node), eef_pose_7d)
     return lines
 
 
 # ---------------------------------------------------------------------------
-# STUDENT TODO 1: robot specification -> triples
-# ---------------------------------------------------------------------------
-def robot_spec_to_triples(dh_params, joint_limits):
-    """Ground the UR5 specification; return Turtle lines (list of str).
-
-    Must include:
-      1. stu:my_ur5 a cora:Robot (IEEE 1872 CORA — reused, NOT an hw3:
-         invention), with hw3:producedBy "<GROUP_ID>", hw3:hasDoF 6,
-         and hw3:hasJoint linking the 6 joint instances
-      2. stu:my_ur5_joint1 ~ joint6, each a soma:RevoluteJoint (reused
-         from SOMA) with hw3:jointIndex (1~6), hw3:dh_a / dh_d / dh_alpha
-         (xsd:double), hw3:hasJointLowerLimit / hasJointUpperLimit
-
-    Hint: float literals MUST be "..."^^xsd:double (a bare 0.0892 in
-    Turtle is xsd:decimal and fails the TA structural SHACL shapes).
-    """
-    lines = []
-
-    # ------------------------- your code -------------------------
-
-    raise NotImplementedError('TODO: implement robot_spec_to_triples()')
-
-    # --------------------------------------------------------------
-
-    return lines
-
-
-# ---------------------------------------------------------------------------
-# STUDENT TODO 2: one IK computation -> triples
-# ---------------------------------------------------------------------------
-def ik_computation_to_triples(target_uri, joint_config, ik_status, residual,
-                              target_distance):
-    """Ground one IK execution; return Turtle lines (list of str).
-
-    Must include one instance (suggested URI: stu:ik_<target_uri>) of type
-    hw3:IKComputation, carrying:
-      - hw3:producedBy          "<GROUP_ID>"
-      - hw3:computedForRobot    stu:my_ur5
-      - hw3:solvesForTarget     hw3:<target_uri>   <-- hw3: namespace!
-      - hw3:hasIKStatus         "SOLVED" / "OUT_OF_REACH" / ... (string)
-      - hw3:hasResidual         residual ("..."^^xsd:double)
-      - hw3:hasTargetDistance   target_distance ("..."^^xsd:double)
-                                — read by the SHACL reach check
-      - hw3:hasJointConfiguration  a STRUCTURED hw3:JointConfiguration node
-                                (6x soma:JointState via
-                                common.joint_config_to_ttl)
-    """
-    lines = []
-
-    # ------------------------- your code -------------------------
-
-    raise NotImplementedError('TODO: implement ik_computation_to_triples()')
-
-    # --------------------------------------------------------------
-
-    return lines
-
-
-# ---------------------------------------------------------------------------
-# TA-provided: shared-target instances (world frame, structured)
+# Shared-target instances (world frame, structured)
 # ---------------------------------------------------------------------------
 def targets_to_triples():
     lines = ['# Shared IK targets (fixed experiment settings)', '']
@@ -153,7 +176,7 @@ def targets_to_triples():
 
 
 # ---------------------------------------------------------------------------
-# TA-provided: execution flow (FK part + IK part -> one data.ttl)
+# Execution flow (FK part + IK part -> one Student.ttl)
 # ---------------------------------------------------------------------------
 def main():
     args = common.make_arg_parser(__doc__).parse_args()
@@ -170,44 +193,48 @@ def main():
         gt = json.load(f)
     robot, base_pos = common.connect_sim()
     for i, q in enumerate(gt['joint_poses'][:NUM_FK_CASES]):
-        if args.own:
+        steps = trace_fk(dh_params, q, base_pos)   # correct multiplication
+        if not args.reference:
             pose, _jac = your_fk(dh_params, q, base_pos)
             jacobian_error = round(float(np.linalg.norm(
                 np.asarray(_jac) - np.asarray(gt['jacobian'][i]))), 6)
+            chain_gap = float(np.linalg.norm(
+                np.asarray(pose)[:3] - steps[-1]['cumulative'][:3, 3]))
+            if chain_gap > 0.005:
+                print('[FK] WARNING case {}: your_fk differs from the reference '
+                      'chain by {:.4f} m (Student.ttl records the reference '
+                      'multiplication steps)'.format(i, chain_gap))
         else:
-            # Default: an actual simulator execution — the arm is placed at q
-            # and the end-effector pose is READ from the simulator (it is not
-            # copied from the answer key). The Jacobian is not computed here:
-            # -1.0 means "not computed" (see hw3-ontology.ttl).
+            # debug: read the pose from the simulator; Jacobian not computed
             pose = list(common.sim_eef_pose(robot, q))
             jacobian_error = -1.0
-        # FK error is a POSITION error in metres (same meaning as hw3:hasResidual).
+        # FK error is a POSITION error in metres.
         pose_error = round(float(np.linalg.norm(
             np.asarray(pose)[:3] - np.asarray(gt['poses'][i])[:3])), 6)
         print('[FK] case {} -> pose_err={:.6f} m jac_err={:.6f}'.format(
             i, pose_error, jacobian_error))
-        lines += fk_computation_to_triples(i, q, list(pose),
-                                           pose_error, jacobian_error)
+        lines += fk_computation_to_triples(i, q, list(pose), pose_error,
+                                           jacobian_error, steps)
 
     # ---- IK execution process (3 shared targets) ----
     home_quat = np.asarray(robot.get_eef_pose())[3:]
+    # iteration budget of the solver that produced the result (default argument
+    # of your_ik: the grader only uses default arguments)
+    max_iters = inspect.signature(your_ik).parameters['max_iters'].default
     shoulder = np.asarray(base_pos) + [0.0, 0.0, SHOULDER_HEIGHT]
     for target in SHARED_TARGETS:
         target_pose_7d = list(target['position']) + list(home_quat)
         common.reset_arm(robot, HOME_JOINTS)
-        if args.own:
+        if not args.reference:
             joints = list(your_ik(robot.robot_id, target_pose_7d,
                                   base_pos=base_pos))
-            # judge the solution with the SIMULATOR pose, not with your own FK
-            eef_pos = common.sim_eef_pose(robot, joints)[:3]
         else:
-            # Task 1 default: TA reference IK (simulator solver),
-            # clipped to the course joint limits exactly like your_ik.
             joints = list(np.asarray(
                 pybullet_ik(robot.robot_id, target_pose_7d))[:6])
             joints = [min(max(j, lo), hi)
                       for j, (lo, hi) in zip(joints, JOINT_LIMITS)]
-            eef_pos = common.sim_eef_pose(robot, joints)[:3]
+        # judge the solution with the SIMULATOR pose, not with your own FK
+        eef_pos = common.sim_eef_pose(robot, joints)[:3]
         status, residual = common.classify_ik_result(
             eef_pos, target['position'], base_pos)
         distance = round(float(np.linalg.norm(
@@ -215,7 +242,8 @@ def main():
         print('[IK] {} -> status={}, residual={:.4f} m, distance={:.3f} m'
               .format(target['uri'], status, residual, distance))
         lines += ik_computation_to_triples(
-            target['uri'], joints, status, round(residual, 5), distance)
+            target['uri'], joints, status, round(residual, 5), distance,
+            max_iters)
 
     common.write_graph(OUTPUT_FILE, lines, GROUP_ID, 'ground_execution.py')
 

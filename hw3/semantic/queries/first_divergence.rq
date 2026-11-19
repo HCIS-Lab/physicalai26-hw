@@ -1,0 +1,16 @@
+PREFIX hw3: <http://taica.course/hw3/ontology#>
+PREFIX sh:  <http://www.w3.org/ns/shacl#>
+# ---- STUDENT TODO 5 (FK): where does the TA's FK chain first go wrong? ----------
+# This query runs on the SHACL validation report merged with the data graph.
+# Return, for every case, the SMALLEST step index flagged "MATMUL_MISMATCH"
+# (your TODO 1 shape). Required result columns:
+#     ?caseIndex  ?firstStep
+# Hints: sh:ValidationResult, sh:focusNode, sh:resultMessage, STRSTARTS, MIN, GROUP BY.
+# The step node gives hw3:stepIndex and hw3:isStepOfComputation / hw3:caseIndex.
+
+SELECT ?caseIndex ?firstStep
+WHERE {
+    # ------------------------- your query ------------------------------------
+
+    # -------------------------------------------------------------------------
+}

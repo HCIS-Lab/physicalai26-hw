@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Task 4 — Finite State Machine manipulation pipeline (TA-provided).
+"""Task 3 — Finite State Machine manipulation pipeline (TA-provided).
 
 Validates YOUR IK and FK inside a complete pick-and-place pipeline —
 no learned model, no dataset, no checkpoint: a deterministic FSM drives
@@ -38,7 +38,7 @@ from fk import your_fk, get_ur5_DH_params
 from ik import your_ik
 
 SIM_TIMESTEP = 1.0 / 240.0
-TASK4_SCORE_MAX = 10.0
+TASK3_SCORE_MAX = 10.0
 NUM_EPISODES = 10
 
 IK_TOL = 0.03       # m: achieved EE position vs commanded target
@@ -60,7 +60,7 @@ def sample_episode(seed):
     """Seeded block / goal positions, both well inside the UR5 workspace."""
     rng = np.random.RandomState(seed)
     while True:
-        # sampled inside the workspace the Task 2/3 test cases already cover
+        # sampled inside the workspace the Task 1/2 test cases already cover
         block = np.array([rng.uniform(0.32, 0.47), rng.uniform(0.02, 0.24)])
         goal = np.array([rng.uniform(0.32, 0.47), rng.uniform(0.02, 0.24)])
         if np.linalg.norm(block - goal) > 0.12:
@@ -78,7 +78,7 @@ class FSMPipeline(object):
         self.dh_params = get_ur5_DH_params()
         self.joint_ids = list(robot._joint_name_to_ids.values())
         self.log = []
-        # Task 1 bridge: execution records for the SHACL diagnosis
+        # Semantic bridge: execution records for the SHACL diagnosis
         self.diag_fk, self.diag_ik, self._diag_n = [], [], 0
 
     # ---------------- low-level helpers ----------------
@@ -97,7 +97,7 @@ class FSMPipeline(object):
 
         Long jumps may need re-solving: iterative IK is warm-started from
         the CURRENT joint state, so after the first motion a re-solve
-        refines the solution (exactly how the continuous Task 3 trajectory
+        refines the solution (exactly how the continuous Task 2 trajectory
         converges). Up to 3 solve-and-drive attempts per state.
         """
         target = list(position) + self.home_quat
@@ -119,7 +119,7 @@ class FSMPipeline(object):
         fk_err = float(np.linalg.norm(np.asarray(fk_pose[:3]) - ee))
         self.log.append((state, ik_err, fk_err))
 
-        # Task 1 bridge: failing motions (and the very first motion, as a
+        # Semantic bridge: failing motions (and the very first motion, as a
         # clean sample) are grounded and SHACL-validated after the episodes.
         shoulder = np.asarray(self.base_pos) + [0.0, 0.0, 0.0892]
         distance = float(np.linalg.norm(np.asarray(position) - shoulder))
@@ -225,7 +225,7 @@ def main(args):
               for j in robot._joint_name_to_ids.values()]
     home_quat = np.asarray(robot.get_eef_pose())[3:]
 
-    print('============================ Task 4 : FSM Manipulation Pipeline '
+    print('============================ Task 3 : FSM Manipulation Pipeline '
           '============================\n')
     print('FSM: ' + ' -> '.join(STATES) + '\n')
 
@@ -265,21 +265,21 @@ def main(args):
         p.removeBody(block_id)
         p.removeBody(marker)
 
-    score = TASK4_SCORE_MAX * successes / NUM_EPISODES
+    score = TASK3_SCORE_MAX * successes / NUM_EPISODES
     print('\n===================================================='
           '================================')
-    print('- Your Total Score : {:.3f} / {:.3f}'.format(score, TASK4_SCORE_MAX))
+    print('- Your Total Score : {:.3f} / {:.3f}'.format(score, TASK3_SCORE_MAX))
     print('====================================================='
           '===============================')
 
-    # Task 1 bridge: validate the recorded motions with YOUR grounding
-    # functions + YOUR shapes.ttl (fail-soft; the score above is final).
+    # Semantic bridge: validate the recorded motions with the TA-provided grounding
+    # + exec-shapes.ttl (pySHACL; fail-soft; the score above is final).
     try:
         import sys
         sys.path.insert(0, os.path.join(
             os.path.dirname(os.path.abspath(__file__)), 'semantic'))
         from diagnose import diagnose
-        diagnose('Task 4 FSM', fk_records=fsm.diag_fk, ik_records=fsm.diag_ik)
+        diagnose('Task 3 FSM', fk_records=fsm.diag_fk, ik_records=fsm.diag_ik)
     except Exception as exc:
         import traceback; traceback.print_exc()
         print('(semantic diagnosis unavailable: {})'.format(exc))

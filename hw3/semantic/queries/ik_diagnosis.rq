@@ -1,0 +1,18 @@
+PREFIX hw3: <http://taica.course/hw3/ontology#>
+PREFIX sh:  <http://www.w3.org/ns/shacl#>
+# ---- STUDENT TODO 7: WHY does the TA's IK differ from yours? -----------------
+# Runs on the SHACL report merged with the data graph. Return one row per (target, cause):
+#     ?target  ?cause
+# with ?cause one of
+#   "JOINT_LIMIT_NOT_ENFORCED"  the target has an "IK_JOINT_LIMIT" result (your TODO 3 shape)
+#   "STOPPED_EARLY"             the TA IK did not solve the target although yours did, and its
+#                               iteration budget hw3:hasMaxIterations is smaller than yours
+# (a target can have both, one, or none). ?target is the hw3:solvesForTarget IRI.
+# In the report you must explain, in words, what is wrong in the TA's IK code.
+
+SELECT DISTINCT ?target ?cause
+WHERE {
+    # ------------------------- your query ------------------------------------
+
+    # -------------------------------------------------------------------------
+}

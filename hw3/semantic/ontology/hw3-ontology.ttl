@@ -15,7 +15,7 @@
 
 <http://taica.course/hw3/ontology> a owl:Ontology ;
     rdfs:label "TAICA HW3 Robot Kinematics Evaluation Ontology"@en ;
-    rdfs:comment "Vocabulary for HW3 Task 1 (semantic grounding + SHACL validation): robot specifications and FK/IK execution processes (the solvers themselves are implemented in Tasks 2-3) represented as machine-readable knowledge. Design rule: REUSE existing vocabularies wherever a suitable term exists — IEEE 1872 CORA for robots, SOMA for joints / joint states / poses, IEEE 1872 POS for positions, QUDT for units — and mint hw3: terms only for course-specific concepts (kinematic computations, D-H parameters, statuses, distances) that no standard vocabulary covers."@en ;
+    rdfs:comment "Vocabulary for HW3 Task 4 (SHACL + SPARQL diagnosis): robot specifications and FK/IK execution processes (the solvers themselves are implemented in Tasks 1-2) represented as machine-readable knowledge. Design rule: REUSE existing vocabularies wherever a suitable term exists — IEEE 1872 CORA for robots, SOMA for joints / joint states / poses, IEEE 1872 POS for positions, QUDT for units — and mint hw3: terms only for course-specific concepts (kinematic computations, D-H parameters, statuses, distances) that no standard vocabulary covers."@en ;
     owl:versionInfo "2026-fall-3.1" .
 
 # =============================================================================
@@ -99,7 +99,7 @@ hw3:hasJointUpperLimit a owl:DatatypeProperty ;
     rdfs:label "joint upper limit (radians)"@en .
 
 # =============================================================================
-# 2. Kinematic computations (evaluation of Task 2 and Task 3)
+# 2. Kinematic computations (evaluation of Task 1 and Task 2)
 #    "An FK/IK computation" has no counterpart in CORA/SOMA, so these
 #    are hw3: classes.
 # =============================================================================
@@ -209,7 +209,12 @@ hw3:hasTargetDistance a owl:DatatypeProperty ;
     rdfs:comment "Distance from the robot's shoulder to the IK target (meters), grounded by the numeric layer. SHACL compares it against the course reach limit (0.76 m, measured for this IK setup) to detect ARM_OUT_OF_RANGE."@en ;
     rdfs:label "has target distance (meters)"@en .
 
-# --- evaluation of Task 2 (FK correctness against ground truth) ---
+hw3:hasMaxIterations a owl:DatatypeProperty ;
+    rdfs:domain hw3:IKComputation ; rdfs:range xsd:integer ;
+    rdfs:comment "Iteration budget (max_iters) of the IK solver that produced the result."@en ;
+    rdfs:label "has max iterations"@en .
+
+# --- evaluation of Task 1 (FK correctness against ground truth) ---
 hw3:hasPoseError a owl:DatatypeProperty ;
     rdfs:domain hw3:FKComputation ;
     rdfs:range xsd:double ;
@@ -221,6 +226,93 @@ hw3:hasJacobianError a owl:DatatypeProperty ;
     rdfs:range xsd:double ;
     rdfs:comment "L2 norm between the computed 6x6 Jacobian and the ground-truth Jacobian (course threshold: 0.05). -1.0 when not computed."@en ;
     rdfs:label "has Jacobian error"@en .
+
+# =============================================================================
+# 3. FK multiplication steps (Task 4)
+#    Forward kinematics is a chain of 4x4 matrix products  A_k = A_(k-1) @ T_k.
+#    Each product is recorded as an hw3:FKStep so that a faulty multiplication
+#    can be located with SHACL / SPARQL (TA.ttl vs Student.ttl).
+# =============================================================================
+hw3:FKStep a owl:Class ;
+    rdfs:label "FK multiplication step"@en ;
+    rdfs:comment "One matrix multiplication of the FK chain (step 0 = base, steps 1..6 = joints)."@en .
+
+hw3:HomogeneousTransform a owl:Class ;
+    rdfs:label "Homogeneous transform (affine part)"@en ;
+    rdfs:comment "A 4x4 rigid transform; the 12 entries hw3:m00 .. hw3:m23 hold rows 0-2 (the last row is 0 0 0 1)."@en .
+
+hw3:hasStep a owl:ObjectProperty ;
+    rdfs:domain hw3:FKComputation ; rdfs:range hw3:FKStep ;
+    rdfs:label "has step"@en .
+
+hw3:isStepOfComputation a owl:ObjectProperty ;
+    rdfs:domain hw3:FKStep ; rdfs:range hw3:FKComputation ;
+    rdfs:label "is step of computation"@en .
+
+hw3:stepIndex a owl:DatatypeProperty ;
+    rdfs:domain hw3:FKStep ; rdfs:range xsd:integer ;
+    rdfs:label "step index"@en .
+
+hw3:caseIndex a owl:DatatypeProperty ;
+    rdfs:domain hw3:FKComputation ; rdfs:range xsd:integer ;
+    rdfs:comment "Index of the FK test case; the same index in TA.ttl and Student.ttl means the same joint configuration."@en ;
+    rdfs:label "case index"@en .
+
+hw3:hasLocalTransform a owl:ObjectProperty ;
+    rdfs:domain hw3:FKStep ; rdfs:range hw3:HomogeneousTransform ;
+    rdfs:label "has local transform T_k"@en .
+
+hw3:hasCumulativeTransform a owl:ObjectProperty ;
+    rdfs:domain hw3:FKStep ; rdfs:range hw3:HomogeneousTransform ;
+    rdfs:label "has cumulative transform A_k"@en .
+
+hw3:m00 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (0,0)"@en .
+
+hw3:m01 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (0,1)"@en .
+
+hw3:m02 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (0,2)"@en .
+
+hw3:m03 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (0,3)"@en .
+
+hw3:m10 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (1,0)"@en .
+
+hw3:m11 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (1,1)"@en .
+
+hw3:m12 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (1,2)"@en .
+
+hw3:m13 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (1,3)"@en .
+
+hw3:m20 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (2,0)"@en .
+
+hw3:m21 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (2,1)"@en .
+
+hw3:m22 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (2,2)"@en .
+
+hw3:m23 a owl:DatatypeProperty ;
+    rdfs:domain hw3:HomogeneousTransform ; rdfs:range xsd:double ;
+    rdfs:label "matrix entry (2,3)"@en .
 
 # =============================================================================
 # 5. Shared target poses (TA-provided, world frame)
@@ -240,7 +332,7 @@ hw3:hasPositionZ a owl:DatatypeProperty ;
 
 # (Float literals are always written as "..."^^xsd:double — a bare 0.35 in
 #  Turtle is xsd:decimal, which conflicts with the xsd:double property range
-#  and makes the reasoner report dtRange violations.)
+#  and makes a reasoner report dtRange violations.)
 
 # (The three shared-target INSTANCES are written into output/data.ttl by
 #  ground_execution.py, so the validated data graph is self-contained.)
